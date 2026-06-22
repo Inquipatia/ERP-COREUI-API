@@ -6,7 +6,7 @@
   "main": "apiServer.js",
   "scripts": {
     "start": "node apiServer.js",
-    "build": "prisma generate && prisma db push",
+    "build": "prisma generate",
     "db:generate": "prisma generate",
     "db:push": "prisma db push"
   },
