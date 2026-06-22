@@ -1,0 +1,24 @@
+{
+  "name": "erp-coreui-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API Node/Express para ERP Rubik Creaciones",
+  "main": "apiServer.js",
+  "scripts": {
+    "start": "node apiServer.js",
+    "build": "prisma generate && prisma db push",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
+    "prisma": "^6.19.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
