@@ -1,4 +1,13 @@
+const fs = require('node:fs')
+const path = require('node:path')
 const ExcelJS = require('exceljs')
+
+const TEMPLATE_FILE_NAME = 'cotizacion-rubik.xlsx'
+const DEFAULT_TEMPLATE_PATH = path.join(process.cwd(), 'public', 'templates', TEMPLATE_FILE_NAME)
+const TEMPLATE_CANDIDATES = [
+  DEFAULT_TEMPLATE_PATH,
+  path.join(__dirname, '..', 'public', 'templates', TEMPLATE_FILE_NAME),
+]
 
 const ITEM_START_ROW = 17
 const ITEM_TEMPLATE_ROW = 17
@@ -20,11 +29,59 @@ const COLUMN_WIDTHS = {
   H: 13.5,
 }
 
+const findQuoteTemplatePath = () =>
+  TEMPLATE_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || DEFAULT_TEMPLATE_PATH
+
 const cloneStyle = (style = {}) => JSON.parse(JSON.stringify(style))
 
-const getNumber = (value) => Number(value) || 0
+const getNumber = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+
+  if (value === null || value === undefined || value === '') {
+    return 0
+  }
+
+  const normalized = String(value)
+    .trim()
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(\D|$))/g, '')
+    .replace(',', '.')
+
+  return Number(normalized) || 0
+}
 
 const getText = (value) => String(value ?? '').trim()
+
+const getObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
+
+const firstPresent = (...values) =>
+  values.find((value) => value !== undefined && value !== null && value !== '') ?? undefined
+
+const parseInputDate = (value) => {
+  const dateValue = firstPresent(value)
+
+  if (!dateValue || dateValue instanceof Date) {
+    return dateValue || ''
+  }
+
+  const text = getText(dateValue)
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    const [year, month, day] = text.slice(0, 10).split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  if (/^\d{2}-\d{2}-\d{4}$/.test(text)) {
+    const [day, month, year] = text.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  return text
+}
+
+const hasPresentValue = (value) => firstPresent(value) !== undefined
 
 const safeUnmerge = (worksheet, range) => {
   try {
@@ -284,6 +341,7 @@ const applyHeaderSectionStyles = (worksheet) => {
     'C9',
     'C10',
     'C11',
+    'C12',
 
     // Nº cotización / fecha / vendedor / datos cliente
     'F6',
@@ -333,45 +391,93 @@ const applyMoneyCellStyle = (cell) => {
   }
 }
 
-const normalizePayload = (quotePayload = {}) => {
-  const company = quotePayload.company || quotePayload.rubikCompany || {}
+const unwrapPayload = (quotePayload = {}) => {
+  const nestedPayload = getObject(quotePayload.payload)
 
-  const seller =
+  if (!Object.keys(nestedPayload).length) {
+    return quotePayload
+  }
+
+  return {
+    ...nestedPayload,
+    ...quotePayload,
+    amounts: quotePayload.amounts || nestedPayload.amounts,
+    client: quotePayload.client || nestedPayload.client,
+    company: quotePayload.company || nestedPayload.company,
+    items: quotePayload.items || nestedPayload.items,
+    quote: quotePayload.quote || nestedPayload.quote || nestedPayload.quoteData,
+    quoteData: quotePayload.quoteData || nestedPayload.quoteData,
+    quoteItems: quotePayload.quoteItems || nestedPayload.quoteItems,
+    selectedSeller: quotePayload.selectedSeller || nestedPayload.selectedSeller,
+    seller: quotePayload.seller || nestedPayload.seller,
+  }
+}
+
+const normalizePayload = (inputPayload = {}) => {
+  const quotePayload = unwrapPayload(inputPayload)
+  const company = getObject(quotePayload.company || quotePayload.rubikCompany)
+
+  const rawSeller =
     typeof quotePayload.seller === 'string'
       ? { name: quotePayload.seller }
-      : quotePayload.seller || quotePayload.selectedSeller || {}
+      : getObject(quotePayload.seller || quotePayload.selectedSeller)
 
-  const client = quotePayload.client || {}
+  const rawClient = getObject(quotePayload.client || quotePayload.customer || quotePayload.cliente)
+  const rawQuote = getObject(quotePayload.quote || quotePayload.quoteData || quotePayload.cotizacion)
 
-  const quote = quotePayload.quote || quotePayload.quoteData || {}
-
-  const rawItems = quotePayload.quoteItems || quotePayload.items || []
+  const rawItems = Array.isArray(quotePayload.quoteItems)
+    ? quotePayload.quoteItems
+    : Array.isArray(quotePayload.items)
+      ? quotePayload.items
+      : Array.isArray(quotePayload.detalle)
+        ? quotePayload.detalle
+        : []
 
   const quoteItems = rawItems
     .filter((item) => {
-      const description = getText(item.description)
-      const hasUnitValue =
-        item.unitValue !== '' && item.unitValue !== null && item.unitValue !== undefined
-      const hasQuantity = getNumber(item.quantity) > 0
+      const description = getText(
+        firstPresent(item.description, item.descripcion, item.technicalDescription, item.name),
+      )
+      const hasUnitValue = hasPresentValue(
+        firstPresent(item.unitValue, item.unitPrice, item.valorUnitario, item.price),
+      )
+      const hasTotal = hasPresentValue(firstPresent(item.total, item.totalValue, item.valorTotal))
+      const hasQuantity = getNumber(firstPresent(item.quantity, item.cantidad, item.qty)) > 0
 
-      return description || hasUnitValue || hasQuantity
+      return description || hasUnitValue || hasTotal || hasQuantity
     })
     .map((item) => {
-      const quantity = getNumber(item.quantity)
-      const unitValue = getNumber(item.unitValue)
+      const quantity = getNumber(firstPresent(item.quantity, item.cantidad, item.qty))
+      const unitValue = getNumber(
+        firstPresent(item.unitValue, item.unitPrice, item.valorUnitario, item.price),
+      )
+      const explicitTotal = firstPresent(item.total, item.totalValue, item.valorTotal)
 
       return {
         quantity,
-        description: getText(item.description),
+        description: getText(
+          firstPresent(item.description, item.descripcion, item.technicalDescription, item.name),
+        ),
         unitValue,
-        total: quantity * unitValue,
-        observations: getText(item.observations),
+        total: explicitTotal === undefined ? quantity * unitValue : getNumber(explicitTotal),
+        observations: getText(firstPresent(item.observations, item.observaciones, item.notes)),
       }
     })
 
-  const net = quoteItems.reduce((sum, item) => sum + item.total, 0)
-  const iva = net * 0.19
-  const total = net + iva
+  const calculatedNet = quoteItems.reduce((sum, item) => sum + item.total, 0)
+  const ivaRate = getNumber(firstPresent(rawQuote.ivaRate, quotePayload.ivaRate, 19)) || 19
+  const rawAmounts = getObject(quotePayload.amounts)
+  const netValue = firstPresent(rawAmounts.net, rawAmounts.neto, quotePayload.net, quotePayload.neto)
+  const net = netValue === undefined ? calculatedNet : getNumber(netValue)
+  const ivaValue = firstPresent(rawAmounts.iva, rawAmounts.tax, quotePayload.iva, quotePayload.taxAmount)
+  const iva = ivaValue === undefined ? net * (ivaRate / 100) : getNumber(ivaValue)
+  const totalValue = firstPresent(
+    rawAmounts.total,
+    rawAmounts.totalAmount,
+    quotePayload.total,
+    quotePayload.totalAmount,
+  )
+  const total = totalValue === undefined ? net + iva : getNumber(totalValue)
 
   return {
     company: {
@@ -382,21 +488,52 @@ const normalizePayload = (quotePayload = {}) => {
       address: 'Rubik Creaciones SPA',
       ...company,
     },
-    seller,
-    client,
+    seller: {
+      ...rawSeller,
+      name: getText(firstPresent(rawSeller.name, rawSeller.nombre, rawSeller.fullName)),
+      email: getText(firstPresent(rawSeller.email, rawSeller.mail)),
+    },
+    client: {
+      ...rawClient,
+      name: getText(firstPresent(rawClient.client, rawClient.name, rawClient.nombre, rawClient.contact)),
+      company: getText(
+        firstPresent(rawClient.company, rawClient.empresa, rawClient.businessName, rawClient.razonSocial),
+      ),
+      attention: getText(firstPresent(rawClient.attention, rawClient.atencion, rawClient.contact)),
+      rut: getText(firstPresent(rawClient.rut, rawClient.clientRut)),
+      phone: getText(firstPresent(rawClient.phone, rawClient.telefono, rawClient.clientPhone)),
+      commune: getText(firstPresent(rawClient.commune, rawClient.comuna)),
+      email: getText(firstPresent(rawClient.email, rawClient.mail)),
+      address: getText(firstPresent(rawClient.address, rawClient.direccion)),
+    },
     quote: {
-      quoteNumber: '8103',
-      date: '',
-      subject: '',
-      condition: '',
-      ...quote,
+      ...rawQuote,
+      quoteNumber: getText(
+        firstPresent(rawQuote.quoteNumber, rawQuote.numero, quotePayload.quoteNumber, quotePayload.numero, '8103'),
+      ),
+      date: parseInputDate(firstPresent(rawQuote.date, rawQuote.fecha, quotePayload.date, quotePayload.fecha)),
+      subject: getText(firstPresent(rawQuote.subject, rawQuote.tema, quotePayload.subject, quotePayload.tema)),
+      condition: getText(
+        firstPresent(rawQuote.condition, rawQuote.condicion, quotePayload.condition, quotePayload.condicion),
+      ),
+      observations: getText(
+        firstPresent(
+          rawQuote.observations,
+          rawQuote.observaciones,
+          rawQuote.notes,
+          quotePayload.observations,
+          quotePayload.observaciones,
+          quotePayload.notes,
+        ),
+      ),
+      ivaRate,
     },
     quoteItems,
     amounts: {
+      ...(quotePayload.amounts || {}),
       net,
       iva,
       total,
-      ...(quotePayload.amounts || {}),
     },
   }
 }
@@ -445,19 +582,33 @@ const applyPrintSettings = (worksheet, rows) => {
       showGridLines: false,
     },
   ]
-
-  console.log('[Cotizador 5000 PDF] itemCount:', items.length)
-  console.log('[Cotizador 5000 PDF] extraRowsInserted:', extraRowsInserted)
-  console.log('[Cotizador 5000 PDF] lastContentRow:', lastContentRow)
-  console.log('[Cotizador 5000 PDF] printArea:', printArea)
-  console.log('[Cotizador 5000 PDF] totalRows:', {
-    netRow,
-    ivaRow,
-    totalRow,
-  })
 }
 
-const buildQuoteWorkbook = async (templatePath, quotePayload) => {
+const createTemplateError = (templatePath) => {
+  const error = new Error(`Template ${TEMPLATE_FILE_NAME} was not found at ${templatePath}.`)
+  error.code = 'QUOTE_TEMPLATE_NOT_FOUND'
+  error.statusCode = 500
+  return error
+}
+
+const assertQuoteTemplateReadable = async (templatePath = findQuoteTemplatePath()) => {
+  if (!fs.existsSync(templatePath)) {
+    throw createTemplateError(templatePath)
+  }
+
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.readFile(templatePath)
+
+  return true
+}
+
+const createQuoteWorkbook = async (quotePayload, options = {}) => {
+  const templatePath = options.templatePath || findQuoteTemplatePath()
+
+  if (!fs.existsSync(templatePath)) {
+    throw createTemplateError(templatePath)
+  }
+
   const data = normalizePayload(quotePayload)
 
   const workbook = new ExcelJS.Workbook()
@@ -475,7 +626,10 @@ const buildQuoteWorkbook = async (templatePath, quotePayload) => {
   const items = data.quoteItems
 
   if (!items.length) {
-    throw new Error('Agrega al menos un ítem válido antes de exportar.')
+    const error = new Error('Agrega al menos un item valido antes de exportar.')
+    error.code = 'QUOTE_ITEMS_REQUIRED'
+    error.statusCode = 400
+    throw error
   }
 
   const extraRowsNeeded = Math.max(0, items.length - AVAILABLE_ITEM_ROWS)
@@ -494,17 +648,33 @@ const buildQuoteWorkbook = async (templatePath, quotePayload) => {
   worksheet.getCell('C6').value = data.company.address || data.company.businessName
   worksheet.getCell('C7').value = data.company.phone
   worksheet.getCell('C8').value = data.company.email
-  worksheet.getCell('C9').value = data.client.client || data.client.name || ''
+  worksheet.getCell('C9').value = data.client.name || data.client.client || ''
   worksheet.getCell('C10').value = data.client.company || ''
-  worksheet.getCell('C11').value = data.quote.subject || data.quote.tema || ''
+  worksheet.getCell('C11').value = data.client.attention || ''
+  worksheet.getCell('C12').value = data.quote.subject || data.quote.tema || ''
 
   worksheet.getCell('F6').value = data.quote.quoteNumber
   worksheet.getCell('F7').value = data.quote.date
+  if (data.quote.date instanceof Date) {
+    worksheet.getCell('F7').numFmt = 'dd-mm-yyyy'
+  }
   worksheet.getCell('F8').value = data.seller.name || ''
-  worksheet.getCell('F9').value = data.client.rut || data.client.clientRut || ''
-  worksheet.getCell('F10').value = data.client.phone || data.client.clientPhone || ''
-  worksheet.getCell('F11').value = data.client.commune || data.client.comuna || ''
+  worksheet.getCell('F9').value = data.client.rut || ''
+  worksheet.getCell('F10').value = data.client.phone || ''
+  worksheet.getCell('F11').value = data.client.commune || ''
   worksheet.getCell('F12').value = data.quote.condition || data.quote.condicion || ''
+
+  if (data.quote.observations) {
+    const notesRow = (findRowByLabel(worksheet, 'Notas comerciales') || 38) + 1
+    const notesCell = worksheet.getCell(`A${notesRow}`)
+
+    notesCell.value = data.quote.observations
+    notesCell.alignment = {
+      ...(notesCell.alignment || {}),
+      vertical: 'top',
+      wrapText: true,
+    }
+  }
 
   applyHeaderSectionStyles(worksheet)
 
@@ -593,6 +763,18 @@ const buildQuoteWorkbook = async (templatePath, quotePayload) => {
   return workbook
 }
 
+const buildQuoteWorkbook = async (quotePayload, options = {}) => {
+  const workbook = await createQuoteWorkbook(quotePayload, options)
+  const buffer = await workbook.xlsx.writeBuffer()
+
+  return Buffer.from(buffer)
+}
+
 module.exports = {
+  DEFAULT_TEMPLATE_PATH,
+  TEMPLATE_FILE_NAME,
+  assertQuoteTemplateReadable,
   buildQuoteWorkbook,
+  createQuoteWorkbook,
+  findQuoteTemplatePath,
 }

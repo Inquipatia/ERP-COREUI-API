@@ -695,11 +695,126 @@ const jsonDataAdapter = {
   getCounts,
 }
 
-const adapterMode = String(process.env.RUBIK_DATA_ADAPTER || '').trim().toLowerCase()
-const shouldUsePrismaAdapter =
-  adapterMode === 'postgres' ||
-  adapterMode === 'prisma' ||
-  adapterMode === 'database' ||
-  (!adapterMode && Boolean(process.env.DATABASE_URL))
+const getRequestedAdapterMode = () =>
+  String(process.env.DATA_ADAPTER_MODE || process.env.RUBIK_DATA_ADAPTER || '').trim().toLowerCase()
 
-module.exports = shouldUsePrismaAdapter ? require('./postgresDataAdapter') : jsonDataAdapter
+const requestedAdapterMode = getRequestedAdapterMode()
+const forceJsonAdapter = ['json', 'file', 'local', 'mock'].includes(requestedAdapterMode)
+const forcePrismaAdapter = ['postgres', 'postgresql', 'prisma', 'database', 'mysql'].includes(requestedAdapterMode)
+const shouldTryPrismaAdapter = !forceJsonAdapter && forcePrismaAdapter
+
+let prismaDataAdapter = null
+let activeAdapterMode = shouldTryPrismaAdapter ? 'prisma' : 'json'
+let adapterFallbackReason = shouldTryPrismaAdapter ? '' : 'json mode selected; set DATA_ADAPTER_MODE=prisma to use database'
+
+const loadPrismaDataAdapter = () => {
+  if (!prismaDataAdapter) {
+    prismaDataAdapter = require('./postgresDataAdapter')
+  }
+
+  return prismaDataAdapter
+}
+
+const isPrismaConnectionError = (error) => {
+  const message = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase()
+
+  return [
+    'p1000',
+    'p1001',
+    'p1002',
+    'p1003',
+    'p1010',
+    'authentication failed',
+    'database server',
+    'can\'t reach database',
+    'database_url',
+    'prismaclientinitializationerror',
+    'no se encontro @prisma/client',
+    'no existe',
+  ].some((needle) => message.includes(needle))
+}
+
+const getReadableFallbackReason = (error) => {
+  const message = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase()
+
+  if (message.includes('p1000') || message.includes('authentication failed')) {
+    return 'Prisma unavailable: database authentication failed'
+  }
+
+  if (message.includes('p1001') || message.includes('can\'t reach database') || message.includes('database server')) {
+    return 'Prisma unavailable: database unreachable'
+  }
+
+  if (message.includes('database_url') || message.includes('no existe')) {
+    return 'Prisma unavailable: DATABASE_URL missing or invalid'
+  }
+
+  return 'Prisma unavailable: using JSON fallback'
+}
+
+const switchToJsonFallback = (error) => {
+  activeAdapterMode = 'json'
+  adapterFallbackReason = getReadableFallbackReason(error)
+  console.warn(`Rubik API using JSON fallback: ${adapterFallbackReason}`)
+}
+
+const runWithSelectedAdapter = async (methodName, args = []) => {
+  if (!shouldTryPrismaAdapter || activeAdapterMode === 'json') {
+    return jsonDataAdapter[methodName](...args)
+  }
+
+  try {
+    const prismaAdapter = loadPrismaDataAdapter()
+    return await prismaAdapter[methodName](...args)
+  } catch (error) {
+    if (!isPrismaConnectionError(error)) {
+      throw error
+    }
+
+    switchToJsonFallback(error)
+    return jsonDataAdapter[methodName](...args)
+  }
+}
+
+const getUserByTokenWithFallback = (token) => {
+  if (!token) return null
+
+  if (!shouldTryPrismaAdapter || activeAdapterMode === 'json') {
+    return jsonDataAdapter.getUserByToken(token)
+  }
+
+  try {
+    return loadPrismaDataAdapter().getUserByToken(token) || jsonDataAdapter.getUserByToken(token)
+  } catch (error) {
+    if (isPrismaConnectionError(error)) {
+      switchToJsonFallback(error)
+      return jsonDataAdapter.getUserByToken(token)
+    }
+
+    throw error
+  }
+}
+
+const getAdapterStatus = () => ({
+  db: activeAdapterMode === 'prisma' ? 'connected' : 'fallback',
+  fallbackReason: activeAdapterMode === 'json' ? adapterFallbackReason : undefined,
+  mode: activeAdapterMode,
+  requestedMode: requestedAdapterMode || 'json-default',
+})
+
+module.exports = {
+  login: (payload) => runWithSelectedAdapter('login', [payload]),
+  getUserByToken: getUserByTokenWithFallback,
+  list: (key) => runWithSelectedAdapter('list', [key]),
+  create: (key, prefix, payload) => runWithSelectedAdapter('create', [key, prefix, payload]),
+  update: (key, id, payload) => runWithSelectedAdapter('update', [key, id, payload]),
+  remove: (key, id) => runWithSelectedAdapter('remove', [key, id]),
+  findById: (key, id) => runWithSelectedAdapter('findById', [key, id]),
+  getDashboard: (user) => runWithSelectedAdapter('getDashboard', [user]),
+  createReceivableFromQuote: (quoteId, user) => runWithSelectedAdapter('createReceivableFromQuote', [quoteId, user]),
+  getFinanceSummary: () => runWithSelectedAdapter('getFinanceSummary'),
+  registerPayment: (movementId, payment, user) => runWithSelectedAdapter('registerPayment', [movementId, payment, user]),
+  importLocalStorage: (payload) => runWithSelectedAdapter('importLocalStorage', [payload]),
+  getCounts: () => runWithSelectedAdapter('getCounts'),
+  getAdapterStatus,
+}

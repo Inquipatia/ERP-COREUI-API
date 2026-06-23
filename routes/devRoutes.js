@@ -4,23 +4,20 @@ const { requireAuth } = require('../middleware/authMiddleware')
 
 const router = express.Router()
 
-const getStorageLabel = () => {
-  const adapterMode = String(process.env.RUBIK_DATA_ADAPTER || '').trim().toLowerCase()
-  const usingPrisma =
-    adapterMode === 'postgres' ||
-    adapterMode === 'prisma' ||
-    adapterMode === 'database' ||
-    (!adapterMode && Boolean(process.env.DATABASE_URL))
-
-  return usingPrisma ? 'database' : 'data/rubik-db.json'
-}
-
 router.get('/status', async (_request, response, next) => {
   try {
+    const counts = await dataAdapter.getCounts()
+    const adapterStatus = dataAdapter.getAdapterStatus()
+
     response.json({
+      ok: true,
       status: 'ok',
-      storage: getStorageLabel(),
-      counts: await dataAdapter.getCounts(),
+      mode: adapterStatus.mode,
+      db: adapterStatus.db,
+      storage: adapterStatus.mode === 'json' ? 'data/rubik-db.json' : 'database',
+      requestedMode: adapterStatus.requestedMode,
+      fallbackReason: adapterStatus.fallbackReason,
+      counts,
     })
   } catch (error) {
     next(error)

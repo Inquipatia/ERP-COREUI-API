@@ -13,7 +13,9 @@ const financeRoutes = require('./routes/financeRoutes')
 const supplierRoutes = require('./routes/supplierRoutes')
 const userRoutes = require('./routes/userRoutes')
 const devRoutes = require('./routes/devRoutes')
+const pdfRoutes = require('./routes/pdfRoutes')
 const { attachUser, requireAuth } = require('./middleware/authMiddleware')
+const dataAdapter = require('./services/dataAdapter')
 
 const PORT = process.env.PORT || process.env.API_PORT || 4300
 
@@ -71,16 +73,14 @@ app.get('/', (_request, response) => {
 })
 
 app.get('/health', (_request, response) => {
-  const usingPostgres = process.env.RUBIK_DATA_ADAPTER === 'postgres'
+  const adapterStatus = dataAdapter.getAdapterStatus()
 
   response.json({
     status: 'ok',
     service: 'rubik-erp-api',
-    database: usingPostgres ? 'postgresql' : 'json-file',
-    warning:
-      usingPostgres && !process.env.DATABASE_URL
-        ? 'DATABASE_URL no existe. Configura PostgreSQL en variables de entorno.'
-        : undefined,
+    mode: adapterStatus.mode,
+    db: adapterStatus.db,
+    warning: adapterStatus.fallbackReason,
   })
 })
 
@@ -98,6 +98,7 @@ app.use('/api/finance', financeRoutes)
 app.use('/api/suppliers', supplierRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/dev', devRoutes)
+app.use('/api', pdfRoutes)
 
 app.use('/api', (_request, response) => {
   response.status(404).json({ error: 'API route not found' })
