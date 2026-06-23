@@ -1,5 +1,7 @@
 const cors = require('cors')
 const express = require('express')
+const tenderAnalyzerRoutes = require('./routes/tenderAnalyzerRoutes')
+
 require('dotenv').config({ quiet: true })
 
 const authRoutes = require('./routes/authRoutes')
@@ -104,6 +106,7 @@ app.use('/api/materials', materialRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/dev', devRoutes)
 app.use('/api', pdfRoutes)
+app.use('/api/tender-analyzer', tenderAnalyzerRoutes)
 
 app.use('/api', (_request, response) => {
   response.status(404).json({ error: 'API route not found' })
