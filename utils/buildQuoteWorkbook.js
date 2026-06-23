@@ -54,10 +54,46 @@ const getNumber = (value) => {
 
 const getText = (value) => String(value ?? '').trim()
 
+const getCellValueText = (cell) => {
+  const value = cell.value
+
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  if (typeof value === 'object') {
+    if (value.text) {
+      return getText(value.text)
+    }
+
+    if (value.result) {
+      return getText(value.result)
+    }
+
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((textPart) => textPart.text || '').join('')
+    }
+
+    if (value.formula) {
+      return getText(value.result || value.formula)
+    }
+  }
+
+  return getText(value)
+}
+
 const getObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
 
 const firstPresent = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== '') ?? undefined
+
+const normalizeSearchText = (value) =>
+  getText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
 
 const parseInputDate = (value) => {
   const dateValue = firstPresent(value)
@@ -138,12 +174,12 @@ const safeMergeRanges = (worksheet, ranges) => {
   ranges.forEach((range) => safeMerge(worksheet, range))
 }
 
-const insertRowsBeforeLowerSection = (worksheet, extraRowsNeeded) => {
+const insertRowsBeforeLowerSection = (worksheet, extraRowsNeeded, lowerSectionStartRow = LOWER_SECTION_START_ROW) => {
   if (extraRowsNeeded <= 0) {
     return 0
   }
 
-  const lowerSectionMergeRanges = getMergeRangesFromRow(worksheet, LOWER_SECTION_START_ROW)
+  const lowerSectionMergeRanges = getMergeRangesFromRow(worksheet, lowerSectionStartRow)
   const shiftedLowerSectionMergeRanges = lowerSectionMergeRanges
     .map(parseMergeRange)
     .filter(Boolean)
@@ -151,7 +187,7 @@ const insertRowsBeforeLowerSection = (worksheet, extraRowsNeeded) => {
 
   safeUnmergeRanges(worksheet, lowerSectionMergeRanges)
   worksheet.spliceRows(
-    LOWER_SECTION_START_ROW,
+    lowerSectionStartRow,
     0,
     ...Array.from({ length: extraRowsNeeded }, () => []),
   )
@@ -194,13 +230,13 @@ const clearItemRow = (worksheet, rowNumber) => {
 }
 
 const findRowByLabel = (worksheet, label) => {
-  const normalizedLabel = label.toLowerCase()
+  const normalizedLabel = normalizeSearchText(label)
 
   for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber)
 
     for (let col = 1; col <= 8; col += 1) {
-      const value = getText(row.getCell(col).value).toLowerCase()
+      const value = normalizeSearchText(getCellValueText(row.getCell(col)))
 
       if (value === normalizedLabel) {
         return rowNumber
@@ -209,6 +245,39 @@ const findRowByLabel = (worksheet, label) => {
   }
 
   return null
+}
+
+const findCellByLabel = (worksheet, labels, options = {}) => {
+  const normalizedLabels = labels.map(normalizeSearchText)
+  const minRow = options.minRow || 1
+  const maxRow = options.maxRow || worksheet.rowCount
+  const minCol = options.minCol || 1
+  const maxCol = options.maxCol || PRINT_LAST_COLUMN_INDEX
+
+  for (let rowNumber = minRow; rowNumber <= maxRow; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber)
+
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const value = normalizeSearchText(getCellValueText(row.getCell(col)))
+
+      if (normalizedLabels.includes(value)) {
+        return row.getCell(col)
+      }
+    }
+  }
+
+  return null
+}
+
+const getRightCell = (worksheet, cell, offset = 1) =>
+  worksheet.getRow(cell.row).getCell(cell.col + offset)
+
+const writeRightOfLabel = (worksheet, labels, value, defaultAddress, options = {}) => {
+  const labelCell = findCellByLabel(worksheet, labels, options)
+  const targetCell = labelCell ? getRightCell(worksheet, labelCell) : worksheet.getCell(defaultAddress)
+
+  targetCell.value = value ?? ''
+  return targetCell
 }
 
 const hasPrintableCellValue = (cell) => {
@@ -315,6 +384,56 @@ const writeMoney = (cell, value) => {
   cell.value = Math.round(getNumber(value))
   cell.numFmt = MONEY_FORMAT
 }
+
+const findHeaderColumn = (row, labels) => {
+  const normalizedLabels = labels.map(normalizeSearchText)
+
+  for (let col = 1; col <= PRINT_LAST_COLUMN_INDEX; col += 1) {
+    const value = normalizeSearchText(getCellValueText(row.getCell(col)))
+
+    if (normalizedLabels.includes(value)) {
+      return col
+    }
+  }
+
+  return null
+}
+
+const detectItemTable = (worksheet) => {
+  for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber)
+    const columns = {
+      quantity: findHeaderColumn(row, ['Cantidad']),
+      description: findHeaderColumn(row, ['Descripcion tecnica del producto / servicio', 'Descripcion', 'Descripción']),
+      unitValue: findHeaderColumn(row, ['Valor Unitario', 'Valor unitario']),
+      total: findHeaderColumn(row, ['Valor Total', 'Valor total']),
+      observations: findHeaderColumn(row, ['Observaciones']),
+    }
+
+    if (columns.quantity && columns.description && columns.unitValue && columns.total) {
+      return {
+        headerRow: rowNumber,
+        itemStartRow: rowNumber + 1,
+        itemTemplateRow: rowNumber + 1,
+        columns,
+      }
+    }
+  }
+
+  return {
+    headerRow: ITEM_START_ROW - 1,
+    itemStartRow: ITEM_START_ROW,
+    itemTemplateRow: ITEM_TEMPLATE_ROW,
+    columns: {
+      quantity: 1,
+      description: 2,
+      unitValue: 5,
+      total: 6,
+      observations: 8,
+    },
+  }
+}
+
 const applyCenteredCellStyle = (cell, options = {}) => {
   cell.alignment = {
     ...(cell.alignment || {}),
@@ -624,6 +743,12 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
   }
 
   const items = data.quoteItems
+  const itemTable = detectItemTable(worksheet)
+  const initialLowerSectionRow =
+    findRowByLabel(worksheet, 'DATOS DE TRANSFERENCIA') ||
+    findRowByLabel(worksheet, 'NETO') ||
+    LOWER_SECTION_START_ROW
+  const availableItemRows = Math.max(1, initialLowerSectionRow - itemTable.itemStartRow - 1)
 
   if (!items.length) {
     const error = new Error('Agrega al menos un item valido antes de exportar.')
@@ -632,43 +757,51 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     throw error
   }
 
-  const extraRowsNeeded = Math.max(0, items.length - AVAILABLE_ITEM_ROWS)
-  const extraRowsInserted = insertRowsBeforeLowerSection(worksheet, extraRowsNeeded)
+  const extraRowsNeeded = Math.max(0, items.length - availableItemRows)
+  const extraRowsInserted = insertRowsBeforeLowerSection(worksheet, extraRowsNeeded, initialLowerSectionRow)
 
-  const totalItemRows = AVAILABLE_ITEM_ROWS + extraRowsNeeded
+  const totalItemRows = availableItemRows + extraRowsInserted
 
   for (let index = 0; index < totalItemRows; index += 1) {
-    const rowNumber = ITEM_START_ROW + index
+    const rowNumber = itemTable.itemStartRow + index
 
-    copyRowStyle(worksheet, ITEM_TEMPLATE_ROW, rowNumber)
+    copyRowStyle(worksheet, itemTable.itemTemplateRow, rowNumber)
     clearItemRow(worksheet, rowNumber)
   }
   /*desde acá se empiezan a insertar los items para los documentos*/
 
-  worksheet.getCell('C6').value = data.company.address || data.company.businessName
-  worksheet.getCell('C7').value = data.company.phone
-  worksheet.getCell('C8').value = data.company.email
-  worksheet.getCell('C9').value = data.client.name || data.client.client || ''
-  worksheet.getCell('C10').value = data.client.company || ''
-  worksheet.getCell('C11').value = data.client.attention || ''
-  worksheet.getCell('C12').value = data.quote.subject || data.quote.tema || ''
+  writeRightOfLabel(worksheet, ['DIRECCION', 'DIRECCIÓN'], data.company.address || data.company.businessName, 'C6')
+  writeRightOfLabel(worksheet, ['TELEFONO', 'TELÉFONO'], data.company.phone, 'C7')
+  writeRightOfLabel(worksheet, ['EMAIL'], data.company.email, 'C8')
+  writeRightOfLabel(worksheet, ['CLIENTE'], data.client.name || data.client.client || '', 'C9')
+  writeRightOfLabel(worksheet, ['EMPRESA'], data.client.company || '', 'C10')
+  writeRightOfLabel(worksheet, ['ATENCION', 'ATENCIÓN'], data.client.attention || '', 'C11')
+  writeRightOfLabel(worksheet, ['TEMA'], data.quote.subject || data.quote.tema || '', 'C12')
 
-  worksheet.getCell('F6').value = data.quote.quoteNumber
-  worksheet.getCell('F7').value = data.quote.date
+  writeRightOfLabel(worksheet, ['N° COTIZACION', 'Nº COTIZACION', 'N COTIZACION'], data.quote.quoteNumber, 'F6')
+  const dateCell = writeRightOfLabel(worksheet, ['FECHA'], data.quote.date, 'F7')
   if (data.quote.date instanceof Date) {
-    worksheet.getCell('F7').numFmt = 'dd-mm-yyyy'
+    dateCell.numFmt = 'dd-mm-yyyy'
   }
-  worksheet.getCell('F8').value = data.seller.name || ''
-  worksheet.getCell('F9').value = data.client.rut || ''
-  worksheet.getCell('F10').value = data.client.phone || ''
-  worksheet.getCell('F11').value = data.client.commune || ''
-  worksheet.getCell('F12').value = data.quote.condition || data.quote.condicion || ''
+  writeRightOfLabel(worksheet, ['VENDEDOR'], data.seller.name || '', 'F8')
+  writeRightOfLabel(worksheet, ['RUT CLIENTE'], data.client.rut || '', 'F9')
+  writeRightOfLabel(worksheet, ['TELEFONO', 'TELÉFONO'], data.client.phone || '', 'F10', { minCol: 5 })
+  writeRightOfLabel(worksheet, ['COMUNA'], data.client.commune || '', 'F11')
+  writeRightOfLabel(worksheet, ['CONDICION', 'CONDICIÓN'], data.quote.condition || data.quote.condicion || '', 'F12')
 
-  if (data.quote.observations) {
+  const clientExtraDetails = [
+    data.client.email ? `Email cliente: ${data.client.email}` : '',
+    data.client.address ? `Direccion cliente: ${data.client.address}` : '',
+    data.quote.observations,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  if (clientExtraDetails) {
     const notesRow = (findRowByLabel(worksheet, 'Notas comerciales') || 38) + 1
     const notesCell = worksheet.getCell(`A${notesRow}`)
 
-    notesCell.value = data.quote.observations
+    notesCell.value = clientExtraDetails
     notesCell.alignment = {
       ...(notesCell.alignment || {}),
       vertical: 'top',
@@ -679,7 +812,7 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
   applyHeaderSectionStyles(worksheet)
 
   items.forEach((item, index) => {
-    const rowNumber = ITEM_START_ROW + index
+    const rowNumber = itemTable.itemStartRow + index
 
     safeUnmerge(worksheet, `B${rowNumber}:D${rowNumber}`)
     safeUnmerge(worksheet, `F${rowNumber}:G${rowNumber}`)
@@ -687,42 +820,49 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     safeMerge(worksheet, `B${rowNumber}:D${rowNumber}`)
     safeMerge(worksheet, `F${rowNumber}:G${rowNumber}`)
 
-    worksheet.getCell(`A${rowNumber}`).value = item.quantity
-    worksheet.getCell(`B${rowNumber}`).value = item.description
-    worksheet.getCell(`E${rowNumber}`).value = item.unitValue
-    worksheet.getCell(`F${rowNumber}`).value = item.total
-    worksheet.getCell(`H${rowNumber}`).value = item.observations
+    const row = worksheet.getRow(rowNumber)
+    const quantityCell = row.getCell(itemTable.columns.quantity)
+    const descriptionCell = row.getCell(itemTable.columns.description)
+    const unitValueCell = row.getCell(itemTable.columns.unitValue)
+    const totalCell = row.getCell(itemTable.columns.total)
+    const observationsCell = row.getCell(itemTable.columns.observations || 8)
 
-    worksheet.getCell(`A${rowNumber}`).alignment = {
-      ...worksheet.getCell(`A${rowNumber}`).alignment,
+    quantityCell.value = item.quantity
+    descriptionCell.value = item.description
+    unitValueCell.value = item.unitValue
+    totalCell.value = item.total
+    observationsCell.value = item.observations
+
+    quantityCell.alignment = {
+      ...quantityCell.alignment,
       vertical: 'top',
       horizontal: 'center',
     }
 
-    worksheet.getCell(`B${rowNumber}`).alignment = {
-      ...worksheet.getCell(`B${rowNumber}`).alignment,
+    descriptionCell.alignment = {
+      ...descriptionCell.alignment,
       wrapText: true,
       shrinkToFit: false,
       vertical: 'top',
     }
 
-    worksheet.getCell(`E${rowNumber}`).numFmt = MONEY_FORMAT
-    worksheet.getCell(`F${rowNumber}`).numFmt = MONEY_FORMAT
+    unitValueCell.numFmt = MONEY_FORMAT
+    totalCell.numFmt = MONEY_FORMAT
 
-    worksheet.getCell(`E${rowNumber}`).alignment = {
-      ...worksheet.getCell(`E${rowNumber}`).alignment,
+    unitValueCell.alignment = {
+      ...unitValueCell.alignment,
       vertical: 'top',
       horizontal: 'right',
     }
 
-    worksheet.getCell(`F${rowNumber}`).alignment = {
-      ...worksheet.getCell(`F${rowNumber}`).alignment,
+    totalCell.alignment = {
+      ...totalCell.alignment,
       vertical: 'top',
       horizontal: 'right',
     }
 
-    worksheet.getCell(`H${rowNumber}`).alignment = {
-      ...worksheet.getCell(`H${rowNumber}`).alignment,
+    observationsCell.alignment = {
+      ...observationsCell.alignment,
       wrapText: true,
       shrinkToFit: false,
       vertical: 'top',
