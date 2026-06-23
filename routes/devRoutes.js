@@ -32,4 +32,20 @@ router.post('/import-local-storage', requireAuth, async (request, response, next
   }
 })
 
+router.post('/seed', async (_request, response, next) => {
+  try {
+    response.json(await dataAdapter.seedInitialData())
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/import-json', async (_request, response, next) => {
+  try {
+    response.json(await dataAdapter.importJsonFile())
+  } catch (error) {
+    next(error)
+  }
+})
+
 module.exports = router

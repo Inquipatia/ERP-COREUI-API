@@ -33,7 +33,7 @@ model Client {
   contactName  String?
   contact      String?
   company      String?
-  rut          String?
+  rut          String?  @unique
   phone        String?
   email        String?
   commune      String?
@@ -68,10 +68,30 @@ model Quote {
   updatedAt   DateTime @updatedAt
 
   financialMovements FinancialMovement[]
+  quoteItems QuoteItem[]
 
   @@index([quoteNumber])
   @@index([status])
   @@index([date])
+}
+
+model QuoteItem {
+  id           String   @id
+  quoteId      String?
+  quoteNumber  String?
+  description  String?  @db.Text
+  quantity     Decimal  @default(0) @db.Decimal(14, 2)
+  unitValue    Decimal  @default(0) @db.Decimal(14, 2)
+  total        Decimal  @default(0) @db.Decimal(14, 2)
+  observations String?  @db.Text
+  payload      Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  quote Quote? @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+  @@index([quoteNumber])
 }
 
 model Document {
@@ -170,10 +190,34 @@ model WorkOrder {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  workOrderMovements WorkOrderMovement[]
+
   @@index([status])
   @@index([priority])
   @@index([targetArea])
   @@index([dueDate])
+}
+
+model WorkOrderMovement {
+  id            String   @id
+  workOrderId   String?
+  type          String?
+  status        String?
+  fromArea      String?
+  toArea        String?
+  userName      String?
+  userEmail     String?
+  comment       String?  @db.Text
+  observations  String?  @db.Text
+  payload       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model FinancialMovement {
@@ -225,6 +269,38 @@ model FinancialMovement {
   @@index([dueDate])
 }
 
+model Expense {
+  id             String   @id
+  category       String?
+  documentType   String?
+  documentNumber String?
+  supplierId     String?
+  supplierName   String?
+  description    String?  @db.Text
+  netAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  taxRate        Decimal  @default(19) @db.Decimal(5, 2)
+  taxAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal  @default(0) @db.Decimal(14, 2)
+  paidAmount     Decimal  @default(0) @db.Decimal(14, 2)
+  pendingAmount  Decimal  @default(0) @db.Decimal(14, 2)
+  issueDate      DateTime?
+  dueDate        DateTime?
+  paymentDate    DateTime?
+  status         String   @default("Sin pagar")
+  paymentMethod  String?
+  observations   String?  @db.Text
+  payload        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+
+  @@index([category])
+  @@index([status])
+  @@index([supplierId])
+  @@index([dueDate])
+}
+
 model Payment {
   id                  String   @id
   financialMovementId String
@@ -266,9 +342,62 @@ model Supplier {
   updatedAt          DateTime @updatedAt
 
   financialMovements FinancialMovement[]
+  expenses Expense[]
+  materials Material[]
 
   @@index([name])
   @@index([status])
+}
+
+model ProductService {
+  id                   String   @id
+  name                 String   @unique
+  category             String?
+  type                 String?
+  unit                 String?
+  description          String?  @db.Text
+  technicalDescription String?  @db.Text
+  material             String?
+  suggestedPrice       Decimal  @default(0) @db.Decimal(14, 2)
+  baseCost             Decimal  @default(0) @db.Decimal(14, 2)
+  costPrice            Decimal  @default(0) @db.Decimal(14, 2)
+  status               String   @default("Activo")
+  observations         String?  @db.Text
+  payload              Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([name])
+  @@index([category])
+  @@index([status])
+}
+
+model Material {
+  id             String   @id
+  name           String   @unique
+  category       String?
+  unit           String?
+  sku            String?  @unique
+  currentStock   Decimal  @default(0) @db.Decimal(14, 2)
+  minStock       Decimal  @default(0) @db.Decimal(14, 2)
+  baseCost       Decimal  @default(0) @db.Decimal(14, 2)
+  unitCost       Decimal  @default(0) @db.Decimal(14, 2)
+  wastePercent   Decimal  @default(0) @db.Decimal(6, 2)
+  marginPercent  Decimal  @default(0) @db.Decimal(6, 2)
+  supplierId     String?
+  supplierName   String?
+  status         String   @default("Activo")
+  observations   String?  @db.Text
+  payload        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+
+  @@index([name])
+  @@index([category])
+  @@index([status])
+  @@index([supplierId])
 }
 
 model AuditLog {

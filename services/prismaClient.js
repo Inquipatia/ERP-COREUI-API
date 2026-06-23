@@ -1,8 +1,8 @@
 require('dotenv').config({ quiet: true })
 
 const DATABASE_URL_ERROR =
-  'DATABASE_URL no existe. Configura PostgreSQL en .env, por ejemplo: ' +
-  'DATABASE_URL="postgresql://postgres:postgres@localhost:5432/rubik_erp?schema=public"'
+  'DATABASE_URL no existe. Configura MySQL en .env, por ejemplo: ' +
+  'DATABASE_URL="mysql://usuario:password@host:3306/u415737934_erp_rubik"'
 
 const assertDatabaseUrl = () => {
   if (!process.env.DATABASE_URL) {

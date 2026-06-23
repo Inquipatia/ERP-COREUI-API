@@ -1,22 +1,216 @@
 const { randomUUID } = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
 const { calculateFinanceMovement, getNumberValue, registerMovementPayment } = require('../utils/financeCalculations')
 const { getPrisma } = require('./prismaClient')
 
 const TEMP_DEV_PASSWORD = '123456'
 const sessions = new Map()
+const DB_FILE = path.join(__dirname, '..', 'data', 'rubik-db.json')
+const PERMISSIONS = [
+  'admin.all',
+  'dashboard.view',
+  'clients.view',
+  'clients.manage',
+  'quotes.view',
+  'quotes.create',
+  'quotes.edit',
+  'documents.view',
+  'documents.manage',
+  'tenders.view',
+  'workorders.view',
+  'workorders.create',
+  'users.view',
+  'users.manage',
+  'finance.view',
+  'finance.manage',
+  'finance.payments',
+  'suppliers.view',
+  'suppliers.manage',
+  'products.view',
+  'products.manage',
+  'materials.view',
+  'materials.manage',
+  'ai.chat',
+]
+const OWNER_EMAILS = [
+  'r.rojas@rubikcreaciones.cl',
+  'brojas.romero@rubikcreaciones.cl',
+  'contacto@rubikcreaciones.cl',
+]
+
+const normalizeText = (value = '') =>
+  String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getPermissionsForRole = (role = '', email = '') => {
+  if (OWNER_EMAILS.includes(String(email).toLowerCase())) return PERMISSIONS
+
+  const normalizedRole = normalizeText(role)
+
+  if (normalizedRole.includes('finanzas')) {
+    return [
+      'dashboard.view',
+      'clients.view',
+      'quotes.view',
+      'documents.view',
+      'tenders.view',
+      'workorders.view',
+      'finance.view',
+      'finance.manage',
+      'finance.payments',
+      'suppliers.view',
+      'suppliers.manage',
+      'products.view',
+      'materials.view',
+      'ai.chat',
+    ]
+  }
+
+  if (normalizedRole.includes('venta') || normalizedRole.includes('licitaciones')) {
+    return [
+      'dashboard.view',
+      'clients.view',
+      'clients.manage',
+      'quotes.view',
+      'quotes.create',
+      'quotes.edit',
+      'documents.view',
+      'documents.manage',
+      'tenders.view',
+      'workorders.view',
+      'workorders.create',
+      'products.view',
+      'products.manage',
+      'materials.view',
+      'ai.chat',
+    ]
+  }
+
+  if (normalizedRole.includes('taller') || normalizedRole.includes('produccion')) {
+    return [
+      'dashboard.view',
+      'documents.view',
+      'workorders.view',
+      'workorders.create',
+      'products.view',
+      'materials.view',
+      'materials.manage',
+      'ai.chat',
+    ]
+  }
+
+  return ['dashboard.view', 'documents.view', 'workorders.view', 'products.view', 'materials.view', 'ai.chat']
+}
 
 const modelByKey = {
   users: 'user',
   clients: 'client',
   quotes: 'quote',
+  quoteItems: 'quoteItem',
   documents: 'document',
   tenders: 'tender',
   workOrders: 'workOrder',
+  workOrderMovements: 'workOrderMovement',
   suppliers: 'supplier',
   financeMovements: 'financialMovement',
+  expenses: 'expense',
+  products: 'productService',
+  productServices: 'productService',
+  materials: 'material',
   payments: 'payment',
   auditLogs: 'auditLog',
 }
+
+const COLLECTION_KEYS = [
+  'users',
+  'clients',
+  'quotes',
+  'documents',
+  'tenders',
+  'workOrders',
+  'suppliers',
+  'financeMovements',
+  'products',
+  'materials',
+  'expenses',
+]
+
+const seedUsers = [
+  ['usr-rodrigo-sepulveda', 'Rodrigo Sepúlveda', 'rsepulveda@rubikcreaciones.cl', 'Jefe de ventas', 'Ventas'],
+  ['usr-erick-cabrera', 'Erick Cabrera', 'erick@rubikcreaciones.cl', 'Ejecutivo venta publica', 'Licitaciones'],
+  ['usr-ramon-rojas', 'Ramón Rojas', 'r.rojas@rubikcreaciones.cl', 'Gerencia/Admin', 'Gerencia/Finanzas'],
+  ['usr-christian-guzman', 'Christian Guzmán', 'c.guzman@rubikcreaciones.cl', 'Jefe venta privada', 'Ventas/Finanzas'],
+  ['usr-ignacio-martinez', 'Ignacio Martínez', 'Ignacio.m@rubikcreaciones.cl', 'Jefe de taller', 'Produccion/Taller'],
+  ['usr-benjamin-rojas', 'Benjamín Rojas', 'brojas.romero@rubikcreaciones.cl', 'Gerencia/Admin', 'Gerencia'],
+  ['usr-ivone-romero', 'Ivone Romero', 'contacto@rubikcreaciones.cl', 'Gerencia/Admin', 'Gerencia/Finanzas'],
+  ['usr-mathias-olavarria', 'Mathias Olavarría', 'm.olavarria@rubikcreaciones.cl', 'Diseno y publicidad', 'Diseno/Marketing'],
+  ['usr-jorge-gutierrez', 'Jorge Gutiérrez', 'jgutierrez@rubikcreaciones.cl', 'Disenador imprenta', 'Diseno/Imprenta'],
+].map(([id, name, email, role, area]) => ({
+  id,
+  name,
+  email,
+  role,
+  area,
+  status: 'Activo',
+  position: role,
+  password: TEMP_DEV_PASSWORD,
+}))
+
+const seedProducts = [
+  {
+    id: 'prd-pendon-roller',
+    name: 'Pendon roller',
+    category: 'Display',
+    unit: 'unidad',
+    technicalDescription: 'Pendon roller con impresion full color y bolso de transporte.',
+    baseCost: 28500,
+    suggestedPrice: 49000,
+    material: 'PVC 13 oz',
+    status: 'Activo',
+  },
+  {
+    id: 'prd-vinilo-impreso',
+    name: 'Vinilo impreso',
+    category: 'Grafica adhesiva',
+    unit: 'm2',
+    technicalDescription: 'Impresion en vinilo adhesivo con tintas eco solventes.',
+    baseCost: 8900,
+    suggestedPrice: 18500,
+    material: 'Adhesivo impreso',
+    status: 'Activo',
+  },
+]
+
+const seedMaterials = [
+  {
+    id: 'mat-pvc-13',
+    name: 'PVC 13 oz',
+    category: 'Lonas y telas',
+    unit: 'm2',
+    baseCost: 4200,
+    unitCost: 4200,
+    wastePercent: 8,
+    marginPercent: 35,
+    supplierName: 'Proveedor grafico general',
+    status: 'Activo',
+  },
+  {
+    id: 'mat-adhesivo-impreso',
+    name: 'Adhesivo impreso',
+    category: 'Vinilos',
+    unit: 'm2',
+    baseCost: 6800,
+    unitCost: 6800,
+    wastePercent: 10,
+    marginPercent: 40,
+    supplierName: 'Proveedor vinilos',
+    status: 'Activo',
+  },
+]
 
 const createId = (prefix) => `${prefix}-${Date.now()}-${randomUUID().slice(0, 8)}`
 
@@ -54,7 +248,7 @@ const cleanPayload = (payload = {}) =>
 
 const getModel = (key) => {
   const modelName = modelByKey[key]
-  if (!modelName) throw new Error(`Modelo no soportado por PostgreSQL: ${key}`)
+  if (!modelName) throw new Error(`Modelo no soportado por Prisma: ${key}`)
   return getPrisma()[modelName]
 }
 
@@ -103,7 +297,30 @@ const serializeQuote = (record = {}) => ({
   net: toNumber(record.netAmount),
   iva: toNumber(record.taxAmount),
   total: toNumber(record.totalAmount),
-  items: Array.isArray(record.items) ? record.items : [],
+  items: Array.isArray(record.quoteItems) && record.quoteItems.length
+    ? record.quoteItems.map(serializeQuoteItem)
+    : Array.isArray(record.items)
+      ? record.items
+      : [],
+  quoteItems: Array.isArray(record.quoteItems) && record.quoteItems.length
+    ? record.quoteItems.map(serializeQuoteItem)
+    : Array.isArray(record.items)
+      ? record.items
+      : [],
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeQuoteItem = (record = {}) => ({
+  id: record.id,
+  quoteId: record.quoteId || '',
+  quoteNumber: record.quoteNumber || '',
+  description: record.description || '',
+  quantity: toNumber(record.quantity),
+  unitValue: toNumber(record.unitValue),
+  total: toNumber(record.total),
+  observations: record.observations || '',
   payload: record.payload || null,
   createdAt: toIso(record.createdAt),
   updatedAt: toIso(record.updatedAt),
@@ -159,7 +376,27 @@ const serializeWorkOrder = (record = {}) => ({
   ...record,
   dueDate: toDateOnly(record.dueDate),
   comments: Array.isArray(record.comments) ? record.comments : [],
-  movements: Array.isArray(record.movements) ? record.movements : [],
+  movements: Array.isArray(record.workOrderMovements) && record.workOrderMovements.length
+    ? record.workOrderMovements.map(serializeWorkOrderMovement)
+    : Array.isArray(record.movements)
+      ? record.movements
+      : [],
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeWorkOrderMovement = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  type: record.type || '',
+  status: record.status || '',
+  fromArea: record.fromArea || '',
+  toArea: record.toArea || '',
+  userName: record.userName || '',
+  userEmail: record.userEmail || '',
+  comment: record.comment || '',
+  observations: record.observations || '',
+  payload: record.payload || null,
   createdAt: toIso(record.createdAt),
   updatedAt: toIso(record.updatedAt),
 })
@@ -187,15 +424,89 @@ const serializeFinancialMovement = (record = {}) =>
     updatedAt: toIso(record.updatedAt),
   })
 
+const serializeExpense = (record = {}) =>
+  calculateFinanceMovement({
+    id: record.id,
+    type: 'Egreso',
+    category: record.category || '',
+    documentType: record.documentType || '',
+    documentNumber: record.documentNumber || '',
+    supplierId: record.supplierId || '',
+    supplierName: record.supplierName || '',
+    description: record.description || '',
+    netAmount: toNumber(record.netAmount),
+    taxRate: toNumber(record.taxRate),
+    taxAmount: toNumber(record.taxAmount),
+    totalAmount: toNumber(record.totalAmount),
+    paidAmount: toNumber(record.paidAmount),
+    pendingAmount: toNumber(record.pendingAmount),
+    issueDate: toDateOnly(record.issueDate),
+    dueDate: toDateOnly(record.dueDate),
+    paymentDate: toDateOnly(record.paymentDate),
+    status: record.status || 'Sin pagar',
+    paymentMethod: record.paymentMethod || '',
+    observations: record.observations || '',
+    payload: record.payload || null,
+    createdAt: toIso(record.createdAt),
+    updatedAt: toIso(record.updatedAt),
+  })
+
+const serializeProductService = (record = {}) => ({
+  id: record.id,
+  name: record.name || '',
+  category: record.category || '',
+  type: record.type || '',
+  unit: record.unit || '',
+  description: record.description || '',
+  technicalDescription: record.technicalDescription || '',
+  material: record.material || '',
+  suggestedPrice: toNumber(record.suggestedPrice),
+  baseCost: toNumber(record.baseCost ?? record.costPrice),
+  costPrice: toNumber(record.costPrice),
+  status: record.status || 'Activo',
+  observations: record.observations || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeMaterial = (record = {}) => ({
+  id: record.id,
+  name: record.name || '',
+  category: record.category || '',
+  unit: record.unit || '',
+  sku: record.sku || '',
+  currentStock: toNumber(record.currentStock),
+  minStock: toNumber(record.minStock),
+  baseCost: toNumber(record.baseCost ?? record.unitCost),
+  unitCost: toNumber(record.unitCost),
+  wastePercent: toNumber(record.wastePercent),
+  marginPercent: toNumber(record.marginPercent),
+  supplierId: record.supplierId || '',
+  supplierName: record.supplierName || '',
+  supplier: record.supplierName || '',
+  status: record.status || 'Activo',
+  observations: record.observations || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
 const serializerByKey = {
   users: serializeUser,
   clients: serializeClient,
   quotes: serializeQuote,
+  quoteItems: serializeQuoteItem,
   documents: serializeDocument,
   tenders: serializeTender,
   workOrders: serializeWorkOrder,
+  workOrderMovements: serializeWorkOrderMovement,
   suppliers: serializeSupplier,
   financeMovements: serializeFinancialMovement,
+  expenses: serializeExpense,
+  products: serializeProductService,
+  productServices: serializeProductService,
+  materials: serializeMaterial,
 }
 
 const serialize = (key, record) => (serializerByKey[key] || ((item) => item))(record)
@@ -210,6 +521,9 @@ const getNaturalUniqueWhere = (key, data = {}) => {
   }
   if (key === 'tenders' && hasValue(data.tenderId)) return { tenderId: data.tenderId }
   if (key === 'suppliers' && hasValue(data.rut)) return { rut: data.rut }
+  if ((key === 'products' || key === 'productServices') && hasValue(data.name)) return { name: data.name }
+  if (key === 'materials' && hasValue(data.sku)) return { sku: data.sku }
+  if (key === 'materials' && hasValue(data.name)) return { name: data.name }
   return null
 }
 
@@ -239,7 +553,9 @@ const normalizeForPrisma = (key, payload = {}) => {
       status: payload.status || 'Activo',
       position: payload.position || payload.role || '',
       area: payload.area || '',
-      permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
+      permissions: Array.isArray(payload.permissions)
+        ? payload.permissions
+        : getPermissionsForRole(payload.role || payload.position || 'Ventas', payload.email),
       payload,
       createdAt: toDate(payload.createdAt) || now,
       updatedAt: toDate(payload.updatedAt) || now,
@@ -279,8 +595,28 @@ const normalizeForPrisma = (key, payload = {}) => {
       netAmount: toNumber(payload.netAmount ?? payload.net ?? payload.montoNeto),
       taxAmount: toNumber(payload.taxAmount ?? payload.iva),
       totalAmount: toNumber(payload.totalAmount ?? payload.total),
-      items: Array.isArray(payload.items) ? payload.items : [],
+      items: Array.isArray(payload.quoteItems)
+        ? payload.quoteItems
+        : Array.isArray(payload.items)
+          ? payload.items
+          : [],
       payload: payload.payload || payload,
+      createdAt: toDate(payload.createdAt) || now,
+      updatedAt: toDate(payload.updatedAt) || now,
+    })
+  }
+
+  if (key === 'quoteItems') {
+    return cleanPayload({
+      id: payload.id || createId('qitem'),
+      quoteId: emptyToNull(payload.quoteId),
+      quoteNumber: payload.quoteNumber || '',
+      description: payload.description || payload.descripcion || '',
+      quantity: toNumber(payload.quantity ?? payload.cantidad),
+      unitValue: toNumber(payload.unitValue ?? payload.unitPrice ?? payload.valorUnitario),
+      total: toNumber(payload.total ?? payload.totalValue),
+      observations: payload.observations || payload.observaciones || '',
+      payload,
       createdAt: toDate(payload.createdAt) || now,
       updatedAt: toDate(payload.updatedAt) || now,
     })
@@ -381,6 +717,24 @@ const normalizeForPrisma = (key, payload = {}) => {
     })
   }
 
+  if (key === 'workOrderMovements') {
+    return cleanPayload({
+      id: payload.id || createId('wom'),
+      workOrderId: emptyToNull(payload.workOrderId),
+      type: payload.type || payload.action || '',
+      status: payload.status || '',
+      fromArea: payload.fromArea || payload.sourceArea || '',
+      toArea: payload.toArea || payload.targetArea || '',
+      userName: payload.userName || payload.user || '',
+      userEmail: payload.userEmail || '',
+      comment: payload.comment || payload.body || '',
+      observations: payload.observations || '',
+      payload,
+      createdAt: toDate(payload.createdAt) || now,
+      updatedAt: toDate(payload.updatedAt) || now,
+    })
+  }
+
   if (key === 'suppliers') {
     return cleanPayload({
       id: payload.id || createId('sup'),
@@ -446,18 +800,98 @@ const normalizeForPrisma = (key, payload = {}) => {
     })
   }
 
+  if (key === 'expenses') {
+    const calculated = calculateFinanceMovement({ ...payload, type: 'Egreso' })
+    return cleanPayload({
+      id: payload.id || createId('exp'),
+      category: calculated.category || payload.category || '',
+      documentType: calculated.documentType || payload.documentType || '',
+      documentNumber: calculated.documentNumber || payload.documentNumber || '',
+      supplierId: emptyToNull(calculated.supplierId || payload.supplierId),
+      supplierName: calculated.supplierName || payload.supplierName || payload.supplier || '',
+      description: calculated.description || payload.description || '',
+      netAmount: calculated.netAmount,
+      taxRate: calculated.taxRate,
+      taxAmount: calculated.taxAmount,
+      totalAmount: calculated.totalAmount,
+      paidAmount: calculated.paidAmount,
+      pendingAmount: calculated.pendingAmount,
+      issueDate: toDate(calculated.issueDate || payload.issueDate),
+      dueDate: toDate(calculated.dueDate || payload.dueDate),
+      paymentDate: toDate(calculated.paymentDate || payload.paymentDate),
+      status: calculated.status || payload.status || 'Sin pagar',
+      paymentMethod: calculated.paymentMethod || payload.paymentMethod || '',
+      observations: calculated.observations || payload.observations || '',
+      payload,
+      createdAt: toDate(payload.createdAt) || now,
+      updatedAt: toDate(payload.updatedAt) || now,
+    })
+  }
+
+  if (key === 'products' || key === 'productServices') {
+    return cleanPayload({
+      id: payload.id || createId('prd'),
+      name: payload.name || 'Producto / servicio',
+      category: payload.category || '',
+      type: payload.type || payload.tipo || '',
+      unit: payload.unit || '',
+      description: payload.description || '',
+      technicalDescription: payload.technicalDescription || payload.descripcionTecnica || '',
+      material: payload.material || '',
+      suggestedPrice: toNumber(payload.suggestedPrice ?? payload.price ?? payload.precioSugerido),
+      baseCost: toNumber(payload.baseCost ?? payload.costPrice ?? payload.costoBase),
+      costPrice: toNumber(payload.costPrice ?? payload.baseCost ?? payload.costo),
+      status: payload.status || 'Activo',
+      observations: payload.observations || payload.observaciones || '',
+      payload,
+      createdAt: toDate(payload.createdAt) || now,
+      updatedAt: toDate(payload.updatedAt) || now,
+    })
+  }
+
+  if (key === 'materials') {
+    return cleanPayload({
+      id: payload.id || createId('mat'),
+      name: payload.name || 'Material',
+      category: payload.category || '',
+      unit: payload.unit || '',
+      sku: emptyToNull(payload.sku),
+      currentStock: toNumber(payload.currentStock ?? payload.stock),
+      minStock: toNumber(payload.minStock ?? payload.stockMinimo),
+      baseCost: toNumber(payload.baseCost ?? payload.unitCost ?? payload.costoBase),
+      unitCost: toNumber(payload.unitCost ?? payload.baseCost ?? payload.costoUnitario),
+      wastePercent: toNumber(payload.wastePercent ?? payload.merma),
+      marginPercent: toNumber(payload.marginPercent ?? payload.margen),
+      supplierId: emptyToNull(payload.supplierId),
+      supplierName: payload.supplierName || payload.supplier || '',
+      status: payload.status || 'Activo',
+      observations: payload.observations || payload.observaciones || '',
+      payload,
+      createdAt: toDate(payload.createdAt) || now,
+      updatedAt: toDate(payload.updatedAt) || now,
+    })
+  }
+
   return cleanPayload({ ...payload, updatedAt: now })
 }
 
 const list = async (key) => {
   const model = getModel(key)
-  const records = await model.findMany({ orderBy: { createdAt: 'desc' } })
+  const records = await model.findMany({
+    orderBy: { createdAt: 'desc' },
+    ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
+    ...(key === 'workOrders' ? { include: { workOrderMovements: true } } : {}),
+  })
   return records.map((record) => serialize(key, record))
 }
 
 const findById = async (key, id) => {
   const model = getModel(key)
-  const record = await model.findUnique({ where: { id } })
+  const record = await model.findUnique({
+    where: { id },
+    ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
+    ...(key === 'workOrders' ? { include: { workOrderMovements: true } } : {}),
+  })
   if (!record) {
     const error = new Error('Registro no encontrado.')
     error.statusCode = 404
@@ -466,10 +900,51 @@ const findById = async (key, id) => {
   return serialize(key, record)
 }
 
+const getQuoteItemsFromPayload = (payload = {}) =>
+  Array.isArray(payload.quoteItems)
+    ? payload.quoteItems
+    : Array.isArray(payload.items)
+      ? payload.items
+      : []
+
+const syncQuoteItems = async (quote, payload = {}) => {
+  const quoteItems = getQuoteItemsFromPayload(payload)
+
+  if (!quote?.id || !Array.isArray(quoteItems)) {
+    return
+  }
+
+  await getPrisma().quoteItem.deleteMany({ where: { quoteId: quote.id } })
+
+  if (!quoteItems.length) {
+    return
+  }
+
+  await getPrisma().quoteItem.createMany({
+    data: quoteItems.map((item, index) => ({
+      ...normalizeForPrisma('quoteItems', {
+        ...item,
+        id: item.id || `${quote.id}-item-${index + 1}`,
+        quoteId: quote.id,
+        quoteNumber: quote.quoteNumber,
+      }),
+      quoteId: quote.id,
+      quoteNumber: quote.quoteNumber,
+    })),
+  })
+}
+
+const fetchCreatedOrUpdatedRecord = async (key, id) => findById(key, id)
+
 const create = async (key, prefix, payload) => {
   const model = getModel(key)
   const data = normalizeForPrisma(key, { id: payload.id || createId(prefix), ...payload })
   const record = await model.create({ data })
+  if (key === 'quotes') {
+    await syncQuoteItems(record, payload)
+    return fetchCreatedOrUpdatedRecord(key, record.id)
+  }
+
   return serialize(key, record)
 }
 
@@ -478,6 +953,11 @@ const update = async (key, id, payload) => {
   const data = normalizeForPrisma(key, { ...payload, id })
   delete data.createdAt
   const record = await model.update({ where: { id }, data })
+  if (key === 'quotes') {
+    await syncQuoteItems(record, payload)
+    return fetchCreatedOrUpdatedRecord(key, record.id)
+  }
+
   return serialize(key, record)
 }
 
@@ -500,10 +980,12 @@ const upsertMany = async (key, items = []) => {
       const updateData = { ...data }
       delete updateData.createdAt
       if (!matchedById) delete updateData.id
-      await model.update({ where, data: updateData })
+      const updatedRecord = await model.update({ where, data: updateData })
+      if (key === 'quotes') await syncQuoteItems(updatedRecord, item)
       updated += 1
     } else {
-      await model.create({ data })
+      const createdRecord = await model.create({ data })
+      if (key === 'quotes') await syncQuoteItems(createdRecord, item)
       inserted += 1
     }
   }
@@ -513,7 +995,13 @@ const upsertMany = async (key, items = []) => {
 
 const login = async ({ email, password }) => {
   const normalizedEmail = String(email || '').trim().toLowerCase()
-  const user = await getPrisma().user.findUnique({ where: { email: normalizedEmail } })
+  const prisma = getPrisma()
+
+  if ((await prisma.user.count()) === 0) {
+    await seedInitialData()
+  }
+
+  const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
 
   if (!user || user.status !== 'Activo' || String(user.password || TEMP_DEV_PASSWORD) !== String(password || '')) {
     const error = new Error('Credenciales invalidas.')
@@ -645,6 +1133,9 @@ const importLocalStorage = async (payload = {}) => {
     ['workOrders', ['rubik.erp.workOrders']],
     ['financeMovements', ['rubik.erp.finance.movements']],
     ['suppliers', ['rubik.erp.finance.suppliers']],
+    ['products', ['rubik.erp.products']],
+    ['materials', ['rubik.erp.materials']],
+    ['expenses', ['rubik.erp.expenses']],
   ]
   const localStorageDump = payload.localStorage || payload.storage || payload
   const result = {}
@@ -658,9 +1149,66 @@ const importLocalStorage = async (payload = {}) => {
   return { importedAt: new Date().toISOString(), counts: await getCounts(), result }
 }
 
+const readJsonFilePayload = () => {
+  if (!fs.existsSync(DB_FILE)) {
+    const error = new Error(`No existe ${DB_FILE}.`)
+    error.statusCode = 404
+    throw error
+  }
+
+  return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))
+}
+
+const importJsonPayload = async (payload = {}) => {
+  const result = {}
+
+  for (const key of COLLECTION_KEYS) {
+    result[key] = await upsertMany(key, Array.isArray(payload[key]) ? payload[key] : [])
+  }
+
+  return {
+    importedAt: new Date().toISOString(),
+    counts: await getCounts(),
+    result,
+  }
+}
+
+const importJsonFile = async () => importJsonPayload(readJsonFilePayload())
+
+const seedInitialData = async () => {
+  const filePayload = fs.existsSync(DB_FILE) ? readJsonFilePayload() : {}
+  const payload = {
+    ...filePayload,
+    users: [...seedUsers, ...(Array.isArray(filePayload.users) ? filePayload.users : [])],
+    products: [
+      ...seedProducts,
+      ...(Array.isArray(filePayload.products) ? filePayload.products : []),
+    ],
+    materials: [
+      ...seedMaterials,
+      ...(Array.isArray(filePayload.materials) ? filePayload.materials : []),
+    ],
+    expenses: Array.isArray(filePayload.expenses) ? filePayload.expenses : [],
+  }
+
+  return importJsonPayload(payload)
+}
+
 const getCounts = async () => {
   const prisma = getPrisma()
-  const [users, clients, quotes, documents, tenders, workOrders, financeMovements, suppliers] =
+  const [
+    users,
+    clients,
+    quotes,
+    documents,
+    tenders,
+    workOrders,
+    financeMovements,
+    suppliers,
+    products,
+    materials,
+    expenses,
+  ] =
     await Promise.all([
       prisma.user.count(),
       prisma.client.count(),
@@ -670,9 +1218,24 @@ const getCounts = async () => {
       prisma.workOrder.count(),
       prisma.financialMovement.count(),
       prisma.supplier.count(),
+      prisma.productService.count(),
+      prisma.material.count(),
+      prisma.expense.count(),
     ])
 
-  return { users, clients, quotes, documents, tenders, workOrders, financeMovements, suppliers }
+  return {
+    users,
+    clients,
+    quotes,
+    documents,
+    tenders,
+    workOrders,
+    financeMovements,
+    suppliers,
+    products,
+    materials,
+    expenses,
+  }
 }
 
 module.exports = {
@@ -688,6 +1251,8 @@ module.exports = {
   getFinanceSummary,
   registerPayment,
   importLocalStorage,
+  seedInitialData,
+  importJsonFile,
   getCounts,
   upsertMany,
 }

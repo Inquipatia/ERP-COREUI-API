@@ -29,6 +29,10 @@ const PERMISSIONS = [
   'finance.payments',
   'suppliers.view',
   'suppliers.manage',
+  'products.view',
+  'products.manage',
+  'materials.view',
+  'materials.manage',
   'ai.chat',
 ]
 
@@ -65,6 +69,10 @@ const getPermissionsForRole = (role = '', email = '') => {
       'finance.payments',
       'suppliers.view',
       'suppliers.manage',
+      'products.view',
+      'products.manage',
+      'materials.view',
+      'materials.manage',
       'ai.chat',
     ]
   }
@@ -82,6 +90,9 @@ const getPermissionsForRole = (role = '', email = '') => {
       'tenders.view',
       'workorders.view',
       'workorders.create',
+      'products.view',
+      'products.manage',
+      'materials.view',
       'ai.chat',
     ]
   }
@@ -92,6 +103,9 @@ const getPermissionsForRole = (role = '', email = '') => {
       'documents.view',
       'workorders.view',
       'workorders.create',
+      'products.view',
+      'materials.view',
+      'materials.manage',
       'ai.chat',
     ]
   }
@@ -117,6 +131,9 @@ const COLLECTION_KEYS = [
   'workOrders',
   'suppliers',
   'financeMovements',
+  'products',
+  'materials',
+  'expenses',
 ]
 
 const getDateOffset = (days) => {
@@ -252,6 +269,44 @@ const createSeedSuppliers = () =>
     status: 'Activo',
   }))
 
+const createSeedProducts = () =>
+  [
+    ['prd-pendon-roller', 'Pendon roller', 'Display', 'unidad', 'Pendon roller con impresion full color y bolso de transporte.', 28500, 49000, 'PVC 13 oz', 'Activo'],
+    ['prd-letrero-acrilico', 'Letrero acrilico', 'Letreros', 'unidad', 'Letrero en acrilico cortado con grafica o vinilo aplicado.', 68000, 118000, 'Acrilico 4 mm', 'Activo'],
+    ['prd-vinilo-impreso', 'Vinilo impreso', 'Grafica adhesiva', 'm2', 'Impresion en vinilo adhesivo con tintas eco solventes.', 8900, 18500, 'Adhesivo impreso', 'Activo'],
+    ['prd-instalacion-grafica', 'Instalacion grafica', 'Servicio', 'hora', 'Servicio de instalacion en terreno con equipo tecnico.', 18000, 32000, 'No aplica', 'Activo'],
+  ].map(([id, name, category, unit, technicalDescription, baseCost, suggestedPrice, material, status]) => ({
+    id,
+    name,
+    category,
+    unit,
+    technicalDescription,
+    baseCost,
+    suggestedPrice,
+    material,
+    status,
+  }))
+
+const createSeedMaterials = () =>
+  [
+    ['mat-pvc-13', 'PVC 13 oz', 'Lonas y telas', 'm2', 4200, 8, 35, 'Proveedor grafico general'],
+    ['mat-acrilico-4', 'Acrilico 4 mm', 'Acrilicos', 'plancha', 58000, 15, 42, 'Proveedor acrilicos'],
+    ['mat-sintra-3', 'Sintra 3 mm', 'Rigidos', 'plancha', 16500, 10, 36, 'Distribuidor de sustratos'],
+    ['mat-adhesivo-impreso', 'Adhesivo impreso', 'Vinilos', 'm2', 6800, 10, 40, 'Proveedor vinilos'],
+  ].map(([id, name, category, unit, baseCost, wastePercent, marginPercent, supplier]) => ({
+    id,
+    name,
+    category,
+    unit,
+    baseCost,
+    unitCost: baseCost,
+    wastePercent,
+    marginPercent,
+    supplier,
+    supplierName: supplier,
+    status: 'Activo',
+  }))
+
 const createSeedFinanceMovements = () =>
   [
     ['fin-001', 'Ingreso', 'Venta', 'COT-8105', 'Cafe Sur SPA', '', 'Vinilo impreso POP', 320000, 0, -12],
@@ -363,6 +418,9 @@ const createInitialDatabase = () => {
     workOrders: createSeedWorkOrders(),
     suppliers: createSeedSuppliers(),
     financeMovements: createSeedFinanceMovements(),
+    products: createSeedProducts(),
+    materials: createSeedMaterials(),
+    expenses: [],
   }
 }
 
@@ -653,11 +711,48 @@ const importLocalStorage = (payload = {}) => {
     ['workOrders', ['rubik.erp.workOrders']],
     ['financeMovements', ['rubik.erp.finance.movements']],
     ['suppliers', ['rubik.erp.finance.suppliers']],
+    ['products', ['rubik.erp.products']],
+    ['materials', ['rubik.erp.materials']],
+    ['expenses', ['rubik.erp.expenses']],
   ]
 
   const result = importMap.reduce((summary, [key, storageKeys]) => {
     const items = readImportCollection(payload, key, storageKeys)
     summary[key] = upsertMany(key, items)
+    return summary
+  }, {})
+
+  return {
+    importedAt: new Date().toISOString(),
+    counts: getCounts(),
+    result,
+  }
+}
+
+const seedInitialData = () => {
+  const seedDatabase = createInitialDatabase()
+  const result = COLLECTION_KEYS.reduce((summary, key) => {
+    summary[key] = upsertMany(key, seedDatabase[key] || [])
+    return summary
+  }, {})
+
+  return {
+    importedAt: new Date().toISOString(),
+    counts: getCounts(),
+    result,
+  }
+}
+
+const importJsonFile = () => {
+  if (!fs.existsSync(DB_FILE)) {
+    const error = new Error(`No existe ${DB_FILE}.`)
+    error.statusCode = 404
+    throw error
+  }
+
+  const jsonPayload = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'))
+  const result = COLLECTION_KEYS.reduce((summary, key) => {
+    summary[key] = upsertMany(key, jsonPayload[key] || [])
     return summary
   }, {})
 
@@ -677,6 +772,9 @@ const getCounts = () => ({
   workOrders: list('workOrders').length,
   financeMovements: list('financeMovements').length,
   suppliers: list('suppliers').length,
+  products: list('products').length,
+  materials: list('materials').length,
+  expenses: list('expenses').length,
 })
 
 const jsonDataAdapter = {
@@ -692,6 +790,8 @@ const jsonDataAdapter = {
   getFinanceSummary,
   registerPayment,
   importLocalStorage,
+  seedInitialData,
+  importJsonFile,
   getCounts,
 }
 
@@ -815,6 +915,8 @@ module.exports = {
   getFinanceSummary: () => runWithSelectedAdapter('getFinanceSummary'),
   registerPayment: (movementId, payment, user) => runWithSelectedAdapter('registerPayment', [movementId, payment, user]),
   importLocalStorage: (payload) => runWithSelectedAdapter('importLocalStorage', [payload]),
+  seedInitialData: () => runWithSelectedAdapter('seedInitialData'),
+  importJsonFile: () => runWithSelectedAdapter('importJsonFile'),
   getCounts: () => runWithSelectedAdapter('getCounts'),
   getAdapterStatus,
 }
