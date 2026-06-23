@@ -21,7 +21,8 @@
     "multer": "^2.2.0",
     "pdfjs-dist": "^6.0.227",
     "pg": "^8.22.0",
-    "prisma": "^6.19.0"
+    "prisma": "^6.19.0",
+    "puppeteer": "^25.2.0"
   },
   "engines": {
     "node": ">=18"
