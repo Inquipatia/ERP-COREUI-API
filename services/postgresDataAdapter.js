@@ -934,6 +934,80 @@ const syncQuoteItems = async (quote, payload = {}) => {
   })
 }
 
+const getQuoteDocumentStatus = (quoteStatus = '') => {
+  if (['Aprobada', 'Adjudicada'].includes(quoteStatus)) return 'Adjudicada'
+  if (quoteStatus === 'Borrador') return 'Borrador'
+  return 'Emitida'
+}
+
+const buildQuoteDocumentPayload = (quote = {}) => ({
+  id: `doc-${quote.quoteNumber || quote.id || Date.now()}`,
+  type: 'Cotizacion',
+  documentNumber: String(quote.quoteNumber || Date.now()),
+  date: quote.date,
+  client: quote.client || '',
+  company: quote.company || '',
+  seller: quote.seller || '',
+  netAmount: toNumber(quote.netAmount),
+  taxAmount: toNumber(quote.taxAmount),
+  totalAmount: toNumber(quote.totalAmount),
+  status: getQuoteDocumentStatus(quote.status),
+  origin: 'quotes',
+  tags: ['cotizacion'],
+  observations: quote.subject || '',
+  items: Array.isArray(quote.items) ? quote.items : [],
+  payload: {
+    quoteId: quote.id || '',
+    quoteNumber: quote.quoteNumber || '',
+  },
+  createdAt: quote.createdAt,
+  updatedAt: new Date(),
+})
+
+const syncQuoteDocument = async (quoteRecord = {}) => {
+  if (!quoteRecord?.quoteNumber) return null
+
+  const data = normalizeForPrisma('documents', buildQuoteDocumentPayload(serializeQuote(quoteRecord)))
+  const updateData = { ...data }
+  delete updateData.id
+  delete updateData.createdAt
+
+  const document = await getPrisma().document.upsert({
+    where: {
+      type_documentNumber: {
+        type: data.type,
+        documentNumber: data.documentNumber,
+      },
+    },
+    create: data,
+    update: updateData,
+  })
+
+  return serializeDocument(document)
+}
+
+const getChartLabel = (value, fallback = 'Sin clasificar') => {
+  const label = String(value || '').trim()
+  return label || fallback
+}
+
+const toChartRows = (rows = [], field, fallback) =>
+  rows
+    .map((row) => {
+      const value = row?._count?._all || 0
+      return { label: getChartLabel(row?.[field], fallback), value, count: value }
+    })
+    .sort((first, second) => second.value - first.value || first.label.localeCompare(second.label))
+
+const groupByCount = async (model, field, fallback) => {
+  const rows = await model.groupBy({
+    by: [field],
+    _count: { _all: true },
+  })
+
+  return toChartRows(rows, field, fallback)
+}
+
 const fetchCreatedOrUpdatedRecord = async (key, id) => findById(key, id)
 
 const create = async (key, prefix, payload) => {
@@ -942,6 +1016,7 @@ const create = async (key, prefix, payload) => {
   const record = await model.create({ data })
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
+    await syncQuoteDocument(record)
     return fetchCreatedOrUpdatedRecord(key, record.id)
   }
 
@@ -955,6 +1030,7 @@ const update = async (key, id, payload) => {
   const record = await model.update({ where: { id }, data })
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
+    await syncQuoteDocument(record)
     return fetchCreatedOrUpdatedRecord(key, record.id)
   }
 
@@ -981,11 +1057,17 @@ const upsertMany = async (key, items = []) => {
       delete updateData.createdAt
       if (!matchedById) delete updateData.id
       const updatedRecord = await model.update({ where, data: updateData })
-      if (key === 'quotes') await syncQuoteItems(updatedRecord, item)
+      if (key === 'quotes') {
+        await syncQuoteItems(updatedRecord, item)
+        await syncQuoteDocument(updatedRecord)
+      }
       updated += 1
     } else {
       const createdRecord = await model.create({ data })
-      if (key === 'quotes') await syncQuoteItems(createdRecord, item)
+      if (key === 'quotes') {
+        await syncQuoteItems(createdRecord, item)
+        await syncQuoteDocument(createdRecord)
+      }
       inserted += 1
     }
   }
@@ -1043,6 +1125,107 @@ const getDashboard = async (user) => {
       : null,
     latestDocuments: latestDocuments.map(serializeDocument),
     latestWorkOrders: latestWorkOrders.map(serializeWorkOrder),
+  }
+}
+
+const getDashboardSummary = async () => {
+  const prisma = getPrisma()
+  const [
+    counts,
+    clientsByStatus,
+    quotesByStatus,
+    quotesBySeller,
+    documentsByStatus,
+    documentsByType,
+    tendersByStatus,
+    tendersByRiskLevel,
+    workOrdersByStatus,
+    workOrdersByPriority,
+    usersByStatus,
+    usersByRole,
+    recentQuotes,
+    recentDocuments,
+    recentTenders,
+    recentWorkOrders,
+    recentUsers,
+  ] = await Promise.all([
+    getCounts(),
+    groupByCount(prisma.client, 'status', 'Sin estado'),
+    groupByCount(prisma.quote, 'status', 'Sin estado'),
+    groupByCount(prisma.quote, 'seller', 'Sin vendedor'),
+    groupByCount(prisma.document, 'status', 'Sin estado'),
+    groupByCount(prisma.document, 'type', 'Sin tipo'),
+    groupByCount(prisma.tender, 'status', 'Sin estado'),
+    groupByCount(prisma.tender, 'riskLevel', 'Sin riesgo'),
+    groupByCount(prisma.workOrder, 'status', 'Sin estado'),
+    groupByCount(prisma.workOrder, 'priority', 'Sin prioridad'),
+    groupByCount(prisma.user, 'status', 'Sin estado'),
+    groupByCount(prisma.user, 'role', 'Sin rol'),
+    prisma.quote.findMany({ orderBy: { createdAt: 'desc' }, take: 5, include: { quoteItems: true } }),
+    prisma.document.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
+    prisma.tender.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
+    prisma.workOrder.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
+    prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
+  ])
+
+  return {
+    totals: {
+      clients: counts.clients,
+      quotes: counts.quotes,
+      documents: counts.documents,
+      tenders: counts.tenders,
+      workOrders: counts.workOrders,
+      users: counts.users,
+    },
+    charts: {
+      clients: {
+        byStatus: clientsByStatus,
+      },
+      quotes: {
+        byStatus: quotesByStatus,
+        bySeller: quotesBySeller,
+      },
+      documents: {
+        byStatus: documentsByStatus,
+        byType: documentsByType,
+      },
+      tenders: {
+        byStatus: tendersByStatus,
+        byRiskLevel: tendersByRiskLevel,
+      },
+      workOrders: {
+        byStatus: workOrdersByStatus,
+        byPriority: workOrdersByPriority,
+      },
+      users: {
+        byStatus: usersByStatus,
+        byRole: usersByRole,
+      },
+    },
+    recent: {
+      quotes: recentQuotes.map(serializeQuote),
+      documents: recentDocuments.map(serializeDocument),
+      tenders: recentTenders.map(serializeTender),
+      workOrders: recentWorkOrders.map(serializeWorkOrder),
+      users: recentUsers.map(serializeUser),
+    },
+  }
+}
+
+const getDocumentStats = async () => {
+  const prisma = getPrisma()
+  const [total, byStatus, byType, lastDocuments] = await Promise.all([
+    prisma.document.count(),
+    groupByCount(prisma.document, 'status', 'Sin estado'),
+    groupByCount(prisma.document, 'type', 'Sin tipo'),
+    prisma.document.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
+  ])
+
+  return {
+    total,
+    byStatus,
+    byType,
+    lastDocuments: lastDocuments.map(serializeDocument),
   }
 }
 
@@ -1247,6 +1430,8 @@ module.exports = {
   remove,
   findById,
   getDashboard,
+  getDashboardSummary,
+  getDocumentStats,
   createReceivableFromQuote,
   getFinanceSummary,
   registerPayment,

@@ -12,6 +12,14 @@ router.get('/', requireAuth, requirePermission('documents.view'), async (_reques
   }
 })
 
+router.get('/stats', requireAuth, requirePermission('documents.view'), async (_request, response, next) => {
+  try {
+    response.json(await dataAdapter.getDocumentStats())
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.get('/:id', requireAuth, requirePermission('documents.view'), async (request, response, next) => {
   try {
     response.json(await dataAdapter.findById('documents', request.params.id))

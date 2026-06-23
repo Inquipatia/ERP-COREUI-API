@@ -460,8 +460,6 @@ const state = {
   ...loadDatabase(),
 }
 
-persistDatabase()
-
 const login = ({ email, password }) => {
   const normalizedEmail = String(email || '').trim().toLowerCase()
   const user = state.users.find((candidate) => candidate.email.toLowerCase() === normalizedEmail)
@@ -505,6 +503,80 @@ const mergeCollectionItem = (currentItem = {}, nextItem = {}) => ({
   createdAt: currentItem.createdAt || nextItem.createdAt || new Date().toISOString(),
   updatedAt: nextItem.updatedAt || new Date().toISOString(),
 })
+
+const getQuoteDocumentStatus = (quoteStatus = '') => {
+  if (['Aprobada', 'Adjudicada'].includes(quoteStatus)) return 'Adjudicada'
+  if (quoteStatus === 'Borrador') return 'Borrador'
+  return 'Emitida'
+}
+
+const buildQuoteDocumentPayload = (quote = {}) => ({
+  id: `doc-${quote.quoteNumber || quote.id || Date.now()}`,
+  type: 'Cotizacion',
+  documentNumber: String(quote.quoteNumber || quote.documentNumber || Date.now()),
+  date: quote.date || new Date().toISOString(),
+  client: quote.client || '',
+  company: quote.company || '',
+  seller: quote.seller || '',
+  netAmount: getNumberValue(quote.netAmount ?? quote.net),
+  taxAmount: getNumberValue(quote.taxAmount ?? quote.iva),
+  totalAmount: getNumberValue(quote.totalAmount ?? quote.total),
+  status: getQuoteDocumentStatus(quote.status || quote.estado),
+  origin: 'quotes',
+  tags: ['cotizacion'],
+  observations: quote.subject || quote.observations || '',
+  items: Array.isArray(quote.items) ? quote.items : [],
+  payload: {
+    quoteId: quote.id || '',
+    quoteNumber: quote.quoteNumber || '',
+  },
+  createdAt: quote.createdAt || new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+})
+
+const syncQuoteDocument = (quote = {}) => {
+  if (!quote?.quoteNumber) return null
+
+  const documentPayload = buildQuoteDocumentPayload(quote)
+  const index = state.documents.findIndex((document) => {
+    const sameDocument =
+      document.type === documentPayload.type && String(document.documentNumber) === documentPayload.documentNumber
+    const sameQuote = document.origin === 'quotes' && document.payload?.quoteId && document.payload.quoteId === quote.id
+    return sameDocument || sameQuote
+  })
+
+  if (index === -1) {
+    state.documents = [documentPayload, ...list('documents')]
+    return documentPayload
+  }
+
+  state.documents[index] = mergeCollectionItem(state.documents[index], documentPayload)
+  return state.documents[index]
+}
+
+const getTimestamp = (item = {}) => {
+  const timestamp = new Date(item.updatedAt || item.createdAt || item.date || item.fecha || 0).getTime()
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+const getChartLabel = (value, fallback = 'Sin clasificar') => {
+  const label = String(value || '').trim()
+  return label || fallback
+}
+
+const countBy = (items = [], selector, fallback) =>
+  Object.entries(
+    items.reduce((summary, item) => {
+      const label = getChartLabel(selector(item), fallback)
+      summary[label] = (summary[label] || 0) + 1
+      return summary
+    }, {}),
+  )
+    .map(([label, value]) => ({ label, value, count: value }))
+    .sort((first, second) => second.value - first.value || first.label.localeCompare(second.label))
+
+const getLastItems = (items = [], limit = 5) =>
+  [...items].sort((first, second) => getTimestamp(second) - getTimestamp(first)).slice(0, limit)
 
 const upsertMany = (key, items = []) => {
   const incomingItems = Array.isArray(items) ? items : []
@@ -551,6 +623,7 @@ const create = (key, prefix, payload) => {
   }
   const item = key === 'financeMovements' ? calculateFinanceMovement(baseItem) : baseItem
   state[key] = [item, ...list(key)]
+  if (key === 'quotes') syncQuoteDocument(item)
   persistDatabase()
   return item
 }
@@ -565,6 +638,7 @@ const update = (key, id, payload) => {
   }
   const nextItem = { ...items[index], ...payload, updatedAt: new Date().toISOString() }
   items[index] = key === 'financeMovements' ? calculateFinanceMovement(nextItem) : nextItem
+  if (key === 'quotes') syncQuoteDocument(items[index])
   persistDatabase()
   return items[index]
 }
@@ -609,6 +683,69 @@ const getDashboard = (user) => {
     pendingFinance: canViewFinance ? pendingFinance : null,
     latestDocuments: state.documents.slice(0, 5),
     latestWorkOrders: state.workOrders.slice(0, 5),
+  }
+}
+
+const getDashboardSummary = () => {
+  const clients = list('clients')
+  const quotes = list('quotes')
+  const documents = list('documents')
+  const tenders = list('tenders')
+  const workOrders = list('workOrders')
+  const users = list('users')
+
+  return {
+    totals: {
+      clients: clients.length,
+      quotes: quotes.length,
+      documents: documents.length,
+      tenders: tenders.length,
+      workOrders: workOrders.length,
+      users: users.length,
+    },
+    charts: {
+      clients: {
+        byStatus: countBy(clients, (client) => client.status || client.estado, 'Sin estado'),
+      },
+      quotes: {
+        byStatus: countBy(quotes, (quote) => quote.status || quote.estado, 'Sin estado'),
+        bySeller: countBy(quotes, (quote) => quote.seller || quote.vendedor, 'Sin vendedor'),
+      },
+      documents: {
+        byStatus: countBy(documents, (document) => document.status || document.estado, 'Sin estado'),
+        byType: countBy(documents, (document) => document.type || document.tipoDocumento, 'Sin tipo'),
+      },
+      tenders: {
+        byStatus: countBy(tenders, (tender) => tender.status, 'Sin estado'),
+        byRiskLevel: countBy(tenders, (tender) => tender.riskLevel, 'Sin riesgo'),
+      },
+      workOrders: {
+        byStatus: countBy(workOrders, (workOrder) => workOrder.status, 'Sin estado'),
+        byPriority: countBy(workOrders, (workOrder) => workOrder.priority, 'Sin prioridad'),
+      },
+      users: {
+        byStatus: countBy(users, (user) => user.status, 'Sin estado'),
+        byRole: countBy(users, (user) => user.role, 'Sin rol'),
+      },
+    },
+    recent: {
+      quotes: getLastItems(quotes),
+      documents: getLastItems(documents),
+      tenders: getLastItems(tenders),
+      workOrders: getLastItems(workOrders),
+      users: getLastItems(users),
+    },
+  }
+}
+
+const getDocumentStats = () => {
+  const documents = list('documents')
+
+  return {
+    total: documents.length,
+    byStatus: countBy(documents, (document) => document.status || document.estado, 'Sin estado'),
+    byType: countBy(documents, (document) => document.type || document.tipoDocumento, 'Sin tipo'),
+    lastDocuments: getLastItems(documents),
   }
 }
 
@@ -786,6 +923,8 @@ const jsonDataAdapter = {
   remove,
   findById,
   getDashboard,
+  getDashboardSummary,
+  getDocumentStats,
   createReceivableFromQuote,
   getFinanceSummary,
   registerPayment,
@@ -800,12 +939,11 @@ const getRequestedAdapterMode = () =>
 
 const requestedAdapterMode = getRequestedAdapterMode()
 const forceJsonAdapter = ['json', 'file', 'local', 'mock'].includes(requestedAdapterMode)
-const forcePrismaAdapter = ['postgres', 'postgresql', 'prisma', 'database', 'mysql'].includes(requestedAdapterMode)
-const shouldTryPrismaAdapter = !forceJsonAdapter && forcePrismaAdapter
+const shouldUsePrismaAdapter = !forceJsonAdapter
 
 let prismaDataAdapter = null
-let activeAdapterMode = shouldTryPrismaAdapter ? 'prisma' : 'json'
-let adapterFallbackReason = shouldTryPrismaAdapter ? '' : 'json mode selected; set DATA_ADAPTER_MODE=prisma to use database'
+let activeAdapterMode = shouldUsePrismaAdapter ? 'prisma' : 'json'
+let adapterFallbackReason = forceJsonAdapter ? 'json mode selected explicitly; database disabled' : ''
 
 const loadPrismaDataAdapter = () => {
   if (!prismaDataAdapter) {
@@ -815,91 +953,38 @@ const loadPrismaDataAdapter = () => {
   return prismaDataAdapter
 }
 
-const isPrismaConnectionError = (error) => {
-  const message = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase()
-
-  return [
-    'p1000',
-    'p1001',
-    'p1002',
-    'p1003',
-    'p1010',
-    'authentication failed',
-    'database server',
-    'can\'t reach database',
-    'database_url',
-    'prismaclientinitializationerror',
-    'no se encontro @prisma/client',
-    'no existe',
-  ].some((needle) => message.includes(needle))
-}
-
-const getReadableFallbackReason = (error) => {
-  const message = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase()
-
-  if (message.includes('p1000') || message.includes('authentication failed')) {
-    return 'Prisma unavailable: database authentication failed'
-  }
-
-  if (message.includes('p1001') || message.includes('can\'t reach database') || message.includes('database server')) {
-    return 'Prisma unavailable: database unreachable'
-  }
-
-  if (message.includes('database_url') || message.includes('no existe')) {
-    return 'Prisma unavailable: DATABASE_URL missing or invalid'
-  }
-
-  return 'Prisma unavailable: using JSON fallback'
-}
-
-const switchToJsonFallback = (error) => {
-  activeAdapterMode = 'json'
-  adapterFallbackReason = getReadableFallbackReason(error)
-  console.warn(`Rubik API using JSON fallback: ${adapterFallbackReason}`)
-}
-
 const runWithSelectedAdapter = async (methodName, args = []) => {
-  if (!shouldTryPrismaAdapter || activeAdapterMode === 'json') {
+  if (!shouldUsePrismaAdapter || activeAdapterMode === 'json') {
     return jsonDataAdapter[methodName](...args)
   }
 
-  try {
-    const prismaAdapter = loadPrismaDataAdapter()
-    return await prismaAdapter[methodName](...args)
-  } catch (error) {
-    if (!isPrismaConnectionError(error)) {
-      throw error
-    }
+  const prismaAdapter = loadPrismaDataAdapter()
+  const method = prismaAdapter[methodName]
 
-    switchToJsonFallback(error)
-    return jsonDataAdapter[methodName](...args)
+  if (typeof method !== 'function') {
+    throw new Error(`Metodo no soportado por Prisma adapter: ${methodName}`)
   }
+
+  return method(...args)
 }
 
 const getUserByTokenWithFallback = (token) => {
   if (!token) return null
 
-  if (!shouldTryPrismaAdapter || activeAdapterMode === 'json') {
+  if (!shouldUsePrismaAdapter || activeAdapterMode === 'json') {
     return jsonDataAdapter.getUserByToken(token)
   }
 
-  try {
-    return loadPrismaDataAdapter().getUserByToken(token) || jsonDataAdapter.getUserByToken(token)
-  } catch (error) {
-    if (isPrismaConnectionError(error)) {
-      switchToJsonFallback(error)
-      return jsonDataAdapter.getUserByToken(token)
-    }
-
-    throw error
-  }
+  return loadPrismaDataAdapter().getUserByToken(token)
 }
 
 const getAdapterStatus = () => ({
-  db: activeAdapterMode === 'prisma' ? 'connected' : 'fallback',
+  db: activeAdapterMode === 'prisma' ? 'mysql' : 'json-file',
   fallbackReason: activeAdapterMode === 'json' ? adapterFallbackReason : undefined,
   mode: activeAdapterMode,
-  requestedMode: requestedAdapterMode || 'json-default',
+  provider: activeAdapterMode === 'prisma' ? 'prisma/mysql' : 'json',
+  requestedMode: requestedAdapterMode || 'prisma-default',
+  source: activeAdapterMode === 'prisma' ? 'database' : 'local-json',
 })
 
 module.exports = {
@@ -911,6 +996,8 @@ module.exports = {
   remove: (key, id) => runWithSelectedAdapter('remove', [key, id]),
   findById: (key, id) => runWithSelectedAdapter('findById', [key, id]),
   getDashboard: (user) => runWithSelectedAdapter('getDashboard', [user]),
+  getDashboardSummary: () => runWithSelectedAdapter('getDashboardSummary'),
+  getDocumentStats: () => runWithSelectedAdapter('getDocumentStats'),
   createReceivableFromQuote: (quoteId, user) => runWithSelectedAdapter('createReceivableFromQuote', [quoteId, user]),
   getFinanceSummary: () => runWithSelectedAdapter('getFinanceSummary'),
   registerPayment: (movementId, payment, user) => runWithSelectedAdapter('registerPayment', [movementId, payment, user]),

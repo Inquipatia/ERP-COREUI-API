@@ -14,6 +14,8 @@ router.get('/status', async (_request, response, next) => {
       status: 'ok',
       mode: adapterStatus.mode,
       db: adapterStatus.db,
+      provider: adapterStatus.provider,
+      source: adapterStatus.source,
       storage: adapterStatus.mode === 'json' ? 'data/rubik-db.json' : 'database',
       requestedMode: adapterStatus.requestedMode,
       fallbackReason: adapterStatus.fallbackReason,
