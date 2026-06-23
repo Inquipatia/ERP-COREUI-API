@@ -2,69 +2,121 @@ const express = require('express')
 const multer = require('multer')
 
 const router = express.Router()
-const upload = multer({ storage: multer.memoryStorage() })
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: 20,
+    fileSize: 25 * 1024 * 1024,
+  },
+})
 
-let analyzeTenderContent
-let extractTextFromPdf
-let extractTextFromDocx
-let extractTextFromExcel
-
-try {
-  analyzeTenderContent = require('../utils/tenderAnalyzer/analyzeTenderContent')
-} catch {
-  analyzeTenderContent = null
+const pickFunction = (moduleValue, functionName) => {
+  if (typeof moduleValue === 'function') return moduleValue
+  if (moduleValue && typeof moduleValue[functionName] === 'function') return moduleValue[functionName]
+  if (moduleValue && typeof moduleValue.default === 'function') return moduleValue.default
+  return null
 }
 
-try {
-  extractTextFromPdf = require('../utils/tenderAnalyzer/extractTextFromPdf')
-} catch {
-  extractTextFromPdf = null
+const safeRequire = (path) => {
+  try {
+    return require(path)
+  } catch (error) {
+    console.warn(`Tender analyzer dependency unavailable: ${path}`, error.message)
+    return null
+  }
 }
 
-try {
-  extractTextFromDocx = require('../utils/tenderAnalyzer/extractTextFromDocx')
-} catch {
-  extractTextFromDocx = null
-}
+const analyzeTenderContentModule = safeRequire('../utils/tenderAnalyzer/analyzeTenderContent')
+const extractTextFromPdfModule = safeRequire('../utils/tenderAnalyzer/extractTextFromPdf')
+const extractTextFromDocxModule = safeRequire('../utils/tenderAnalyzer/extractTextFromDocx')
+const extractTextFromExcelModule = safeRequire('../utils/tenderAnalyzer/extractTextFromExcel')
 
-try {
-  extractTextFromExcel = require('../utils/tenderAnalyzer/extractTextFromExcel')
-} catch {
-  extractTextFromExcel = null
-}
+const analyzeTenderContent = pickFunction(analyzeTenderContentModule, 'analyzeTenderContent')
+const extractTextFromPdf = pickFunction(extractTextFromPdfModule, 'extractTextFromPdf')
+const extractTextFromDocx = pickFunction(extractTextFromDocxModule, 'extractTextFromDocx')
+const extractTextFromExcel = pickFunction(extractTextFromExcelModule, 'extractTextFromExcel')
 
 const getExtension = (filename = '') => {
   const parts = filename.toLowerCase().split('.')
   return parts.length > 1 ? parts.pop() : ''
 }
 
+const normalizeExtractedResult = (file, result, fallbackMethod = 'unknown') => {
+  if (typeof result === 'string') {
+    return {
+      fileName: file.originalname,
+      fileType: file.mimetype || 'text/plain',
+      extractedText: result,
+      extractionMethod: fallbackMethod,
+      extractionWarnings: [],
+      segments: [],
+    }
+  }
+
+  return {
+    fileName: result?.fileName || file.originalname,
+    fileType: result?.fileType || file.mimetype || 'application/octet-stream',
+    extractedText: result?.extractedText || result?.text || '',
+    extractionMethod: result?.extractionMethod || fallbackMethod,
+    extractionWarnings: result?.extractionWarnings || result?.warnings || [],
+    segments: result?.segments || [],
+  }
+}
+
 const extractTextFromFile = async (file) => {
   const ext = getExtension(file.originalname)
 
   if (ext === 'txt') {
-    return file.buffer.toString('utf8')
+    return normalizeExtractedResult(file, file.buffer.toString('utf8'), 'txt-buffer')
   }
 
-  if (ext === 'pdf' && extractTextFromPdf) {
-    return extractTextFromPdf(file.buffer, file.originalname)
+  if (ext === 'pdf') {
+    if (!extractTextFromPdf) {
+      throw new Error('Extractor PDF no disponible o mal exportado.')
+    }
+
+    return normalizeExtractedResult(file, await extractTextFromPdf(file), 'pdfjs-dist')
   }
 
-  if (ext === 'docx' && extractTextFromDocx) {
-    return extractTextFromDocx(file.buffer, file.originalname)
+  if (ext === 'docx') {
+    if (!extractTextFromDocx) {
+      throw new Error('Extractor DOCX no disponible o mal exportado.')
+    }
+
+    return normalizeExtractedResult(file, await extractTextFromDocx(file), 'mammoth')
   }
 
-  if (['xlsx', 'xls'].includes(ext) && extractTextFromExcel) {
-    return extractTextFromExcel(file.buffer, file.originalname)
+  if (['xlsx', 'xls'].includes(ext)) {
+    if (!extractTextFromExcel) {
+      throw new Error('Extractor Excel no disponible o mal exportado.')
+    }
+
+    return normalizeExtractedResult(file, await extractTextFromExcel(file), 'exceljs')
   }
 
-  return ''
+  return normalizeExtractedResult(
+    file,
+    {
+      extractedText: '',
+      extractionWarnings: [
+        `Formato no soportado para extracción automática: ${file.originalname}`,
+      ],
+    },
+    'unsupported',
+  )
 }
 
-router.get('/status', (req, res) => {
+router.get('/status', (_req, res) => {
   res.json({
     ok: true,
     service: 'tender-analyzer',
     supportedFiles: ['pdf', 'docx', 'xlsx', 'xls', 'txt', 'jpg', 'jpeg', 'png'],
+    extractors: {
+      pdf: Boolean(extractTextFromPdf),
+      docx: Boolean(extractTextFromDocx),
+      excel: Boolean(extractTextFromExcel),
+      analyzer: Boolean(analyzeTenderContent),
+    },
   })
 })
 
@@ -73,49 +125,58 @@ router.post('/analyze-documents', upload.array('documents', 20), async (req, res
     const files = req.files || []
     const manualText = req.body?.sourceText || ''
 
-    const extractedParts = []
+    const sources = []
 
     for (const file of files) {
-      const text = await extractTextFromFile(file)
-
-      extractedParts.push({
-        fileName: file.originalname,
-        text: typeof text === 'string' ? text : text?.text || '',
-      })
+      const extracted = await extractTextFromFile(file)
+      sources.push(extracted)
     }
 
     const extractedText = [
       manualText,
-      ...extractedParts.map((item) => `\n\n===== ${item.fileName} =====\n${item.text}`),
+      ...sources.map((source) => {
+        const text = source.extractedText || ''
+        return `\n\n===== ${source.fileName} =====\n${text}`
+      }),
     ]
       .filter(Boolean)
       .join('\n')
+      .trim()
 
-    if (!extractedText.trim()) {
+    if (!extractedText) {
       return res.status(400).json({
         ok: false,
         error:
           'No se pudo extraer texto de los documentos. Puedes pegar el texto manualmente como respaldo.',
+        documentDiagnostics: sources.map((source) => ({
+          fileName: source.fileName,
+          fileType: source.fileType,
+          extractionMethod: source.extractionMethod,
+          extractionWarnings: source.extractionWarnings,
+          extractedLength: 0,
+        })),
       })
     }
 
     const analysis = analyzeTenderContent
-      ? await analyzeTenderContent(extractedText, {
-          sourceFiles: files.map((file) => ({
-            name: file.originalname,
-            size: file.size,
-            mimetype: file.mimetype,
-          })),
+      ? analyzeTenderContent({
+          sources,
+          manualText,
         })
       : {
-          sourceText: extractedText,
-          summary: extractedText.slice(0, 1200),
+          tenderData: {
+            sourceText: extractedText,
+            summary: extractedText.slice(0, 1200),
+          },
+          fieldSources: {},
+          documentDiagnostics: [],
+          extractedText,
           globalWarnings: ['Analizador avanzado no disponible. Se devolvió texto extraído.'],
         }
 
-    res.json({
+    return res.json({
       ok: true,
-      extractedText,
+      extractedText: analysis.extractedText || extractedText,
       sourceFiles: files.map((file) => ({
         name: file.originalname,
         size: file.size,
@@ -126,7 +187,7 @@ router.post('/analyze-documents', upload.array('documents', 20), async (req, res
   } catch (error) {
     console.error('Error en tender analyzer:', error)
 
-    res.status(500).json({
+    return res.status(500).json({
       ok: false,
       error: error.message || 'No se pudieron analizar los documentos.',
     })
