@@ -59,6 +59,7 @@ const corsOptions = {
     'X-User-Role',
     'X-User-Permissions',
   ],
+  exposedHeaders: ['Content-Disposition', 'Content-Type', 'Content-Length'],
 }
 
 const app = express()

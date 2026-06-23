@@ -6,11 +6,15 @@ const {
   buildQuoteWorkbook,
   findQuoteTemplatePath,
 } = require('../utils/buildQuoteWorkbook')
+const {
+  CONVERSION_ERROR_MESSAGE,
+  convertWorkbookToPdf,
+  getLibreOfficeInfo,
+} = require('../utils/convertWorkbookToPdf')
 
 const router = express.Router()
 
-const XLSX_CONTENT_TYPE =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const PDF_CONTENT_TYPE = 'application/pdf'
 
 const safeFileName = (value) =>
   String(value || '8103')
@@ -36,6 +40,7 @@ const getExportStatus = async () => {
   const templatePath = findQuoteTemplatePath()
   const templateFound = fs.existsSync(templatePath)
   let canGenerateXlsx = false
+  const libreOfficeInfo = await getLibreOfficeInfo()
 
   if (templateFound) {
     try {
@@ -51,6 +56,9 @@ const getExportStatus = async () => {
     templateFound,
     templatePath: templateFound ? templatePath : DEFAULT_TEMPLATE_PATH,
     canGenerateXlsx,
+    canConvertPdf: libreOfficeInfo.canConvertPdf,
+    libreOfficePath: libreOfficeInfo.libreOfficePath,
+    mode: 'template-xlsx-to-pdf',
   }
 }
 
@@ -65,19 +73,29 @@ router.post('/export-pdf', async (request, response) => {
   }
 
   const quoteNumber = getQuoteNumber(request.body)
-  const fileName = `Cotizacion-Rubik-${quoteNumber}.xlsx`
+  const fileName = `Cotizacion-Rubik-${quoteNumber}.pdf`
 
   try {
     const xlsxBuffer = await buildQuoteWorkbook(request.body)
+    const pdfBuffer = await convertWorkbookToPdf(xlsxBuffer, quoteNumber)
 
-    response.setHeader('Content-Type', XLSX_CONTENT_TYPE)
+    response.setHeader('Content-Type', PDF_CONTENT_TYPE)
     response.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    response.setHeader('Content-Length', Buffer.byteLength(xlsxBuffer))
-    response.send(xlsxBuffer)
+    response.setHeader('Content-Length', Buffer.byteLength(pdfBuffer))
+    response.send(pdfBuffer)
   } catch (error) {
+    if (error.code === 'PDF_CONVERSION_UNAVAILABLE') {
+      response.status(503).json({
+        ok: false,
+        code: 'PDF_CONVERSION_UNAVAILABLE',
+        message: CONVERSION_ERROR_MESSAGE,
+      })
+      return
+    }
+
     response.status(error.statusCode || 500).json({
       ok: false,
-      message: error.message || 'No se pudo generar la cotizacion XLSX.',
+      message: error.message || 'No se pudo generar la cotizacion PDF.',
     })
   }
 })
