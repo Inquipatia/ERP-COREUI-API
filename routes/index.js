@@ -10,6 +10,7 @@ const financeRouter = require('./finance')
 const paymentsRouter = require('./payments')
 const suppliersRouter = require('./suppliers')
 const importsRouter = require('./imports')
+const pdfRoutes = require('./pdfRoutes')
 
 const router = express.Router()
 
@@ -23,5 +24,6 @@ router.use('/finance', financeRouter)
 router.use('/payments', paymentsRouter)
 router.use('/suppliers', suppliersRouter)
 router.use('/imports', importsRouter)
+router.use('/export', pdfRoutes)
 
 module.exports = router

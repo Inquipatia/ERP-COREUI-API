@@ -1,327 +1,297 @@
-﻿const htmlEscape = (value) =>
-  String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-
-const getNumber = (value) => {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
-  if (value === null || value === undefined || value === '') return 0
-
-  const normalized = String(value)
-    .replace(/[^\d,.-]/g, '')
-    .replace(/\.(?=\d{3}(\D|$))/g, '')
-    .replace(',', '.')
-
-  return Number(normalized) || 0
+﻿function escapeHTML(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }
 
-const formatCurrency = (value) =>
-  new Intl.NumberFormat('es-CL', {
-    style: 'currency',
-    currency: 'CLP',
-    maximumFractionDigits: 0,
-  }).format(getNumber(value))
+function money(value) {
+  const number = Number(value || 0)
 
-const firstPresent = (...values) =>
-  values.find((value) => value !== undefined && value !== null && value !== '') ?? ''
-
-const getNestedObject = (value) =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
-
-const normalizeItem = (item = {}) => {
-  const cantidad = getNumber(firstPresent(item.cantidad, item.quantity, item.qty, 0))
-  const valorUnitario = getNumber(
-    firstPresent(item.valorUnitario, item.unitValue, item.unitPrice, item.price, 0),
-  )
-  const total = getNumber(firstPresent(item.total, item.valorTotal, item.lineTotal, cantidad * valorUnitario))
-
-  return {
-    cantidad,
-    descripcion: firstPresent(item.descripcion, item.description, item.technicalDescription),
-    valorUnitario,
-    total,
-    observaciones: firstPresent(item.observaciones, item.observations),
-  }
+  return `$${number.toLocaleString('es-CL')}`
 }
 
-const normalizeQuoteData = (data = {}) => {
-  const payload = getNestedObject(data.payload)
-  const company = getNestedObject(data.company || payload.company)
-  const client = getNestedObject(data.client || payload.client)
-  const seller = getNestedObject(data.seller || payload.seller)
-  const quote = getNestedObject(data.quote || data.quoteData || payload.quote || payload.quoteData)
-  const amounts = getNestedObject(data.amounts || payload.amounts)
-  const rawItems = firstPresent(data.items, data.quoteItems, data.itemsQuote, payload.items, payload.quoteItems, [])
-  const items = (Array.isArray(rawItems) ? rawItems : []).map(normalizeItem)
-  const neto = getNumber(firstPresent(data.neto, data.net, amounts.net, amounts.neto, data.montoNeto))
-  const iva = getNumber(firstPresent(data.iva, amounts.iva, amounts.taxAmount))
-  const total = getNumber(firstPresent(data.total, amounts.total, amounts.totalAmount))
-  const computedNeto = items.reduce((sum, item) => sum + item.total, 0)
-  const finalNeto = neto || computedNeto
-  const finalIva = iva || Math.round(finalNeto * 0.19)
-  const finalTotal = total || finalNeto + finalIva
+function getItems(data) {
+  if (Array.isArray(data.items)) return data.items
+  if (Array.isArray(data.detalles)) return data.detalles
+  if (Array.isArray(data.productos)) return data.productos
+  if (Array.isArray(data.lineas)) return data.lineas
 
-  return {
-    numero: firstPresent(data.numero, data.quoteNumber, quote.numero, quote.quoteNumber, '8103'),
-    fecha: firstPresent(data.fecha, data.date, quote.fecha, quote.date),
-    cliente: firstPresent(data.cliente, data.customer, client.cliente, client.client, client.name),
-    rut: firstPresent(data.rut, data.rutCliente, client.rut, client.rutCliente),
-    atencion: firstPresent(data.atencion, data.attention, client.atencion, client.attention),
-    telefono: firstPresent(data.telefono, data.phone, client.telefono, client.phone),
-    comuna: firstPresent(data.comuna, data.commune, client.comuna, client.commune),
-    condicion: firstPresent(data.condicion, data.condition, quote.condicion, quote.condition),
-    vendedor: firstPresent(data.vendedor, data.sellerName, seller.name, quote.vendedor),
-    tema: firstPresent(data.tema, data.subject, quote.tema, quote.subject),
-    observaciones: firstPresent(data.observaciones, data.observations, quote.observaciones),
-    empresaRubik: firstPresent(company.businessName, company.name, 'Rubik Creaciones'),
-    rutRubik: firstPresent(company.rut, '77.589.233-1'),
-    emailRubik: firstPresent(company.email, 'contacto@rubikcreaciones.cl'),
-    telefonoRubik: firstPresent(company.phone, '93535395'),
-    direccionRubik: firstPresent(company.address, 'Rubik Creaciones SPA'),
-    items,
-    neto: finalNeto,
-    iva: finalIva,
-    total: finalTotal,
-  }
+  return []
 }
 
-const renderItemRows = (items) => {
-  if (!items.length) {
-    return `
-      <tr>
-        <td colspan="5" class="empty-row">Sin items ingresados.</td>
-      </tr>
-    `
-  }
+function renderCotizacionHTML(data = {}) {
+  const items = getItems(data)
 
-  return items
-    .map(
-      (item) => `
-        <tr>
-          <td class="qty">${htmlEscape(item.cantidad)}</td>
-          <td class="description">${htmlEscape(item.descripcion)}</td>
-          <td class="money">${formatCurrency(item.valorUnitario)}</td>
-          <td class="money">${formatCurrency(item.total)}</td>
-          <td class="notes">${htmlEscape(item.observaciones)}</td>
-        </tr>
-      `,
-    )
-    .join('')
-}
+  const neto = Number(data.neto || data.subtotal || 0)
+  const iva = Number(data.iva || Math.round(neto * 0.19))
+  const total = Number(data.total || neto + iva)
 
-const renderCotizacionHTML = (data = {}) => {
-  const quote = normalizeQuoteData(data)
-
-  return `<!doctype html>
+  return `
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <title>Cotizacion ${htmlEscape(quote.numero)}</title>
+  <meta charset="UTF-8" />
+
   <style>
-    @page { size: A4; margin: 14mm 12mm 18mm; }
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      color: #111827;
-      background: #ffffff;
+      padding: 0;
       font-family: Arial, Helvetica, sans-serif;
-      font-size: 11px;
-      line-height: 1.35;
+      font-size: 12px;
+      color: #111;
+      background: #fff;
     }
-    .document { width: 100%; padding-bottom: 10mm; }
+
+    .page {
+      padding: 28px;
+      width: 100%;
+    }
+
     .header {
       display: flex;
-      align-items: flex-start;
       justify-content: space-between;
-      gap: 20px;
-      border-bottom: 3px solid #1d4ed8;
+      align-items: flex-start;
+      border-bottom: 3px solid #111;
       padding-bottom: 14px;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
     }
-    .brand-title { color: #1d4ed8; font-size: 25px; font-weight: 800; letter-spacing: .3px; }
-    .tagline { color: #6d28d9; font-size: 12px; font-weight: 700; margin-top: 2px; }
-    .company-data { color: #4b5563; margin-top: 8px; }
-    .quote-box {
-      min-width: 175px;
-      border: 1px solid #cbd5e1;
-      border-radius: 10px;
-      overflow: hidden;
+
+    .brand-title {
+      font-size: 24px;
+      font-weight: 800;
+      margin: 0;
+      letter-spacing: 0.4px;
+    }
+
+    .brand-subtitle {
+      margin-top: 4px;
+      font-size: 12px;
+      color: #444;
+    }
+
+    .quote-meta {
       text-align: right;
+      line-height: 1.55;
+      font-size: 12px;
     }
-    .quote-box .label { background: #0f172a; color: #ffffff; font-weight: 700; padding: 8px 10px; }
-    .quote-box .number { font-size: 18px; font-weight: 800; padding: 10px; color: #1d4ed8; }
-    .quote-box .date { padding: 0 10px 10px; color: #4b5563; }
-    .section-grid {
+
+    .quote-number {
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .client-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 16px;
+      gap: 8px 20px;
+      margin-bottom: 18px;
+      padding: 14px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: #fafafa;
     }
-    .section {
-      border: 1px solid #dbe3ef;
-      border-radius: 10px;
-      overflow: hidden;
-      page-break-inside: avoid;
-      break-inside: avoid;
+
+    .field strong {
+      display: inline-block;
+      min-width: 80px;
     }
-    .section-title {
-      background: #f1f5f9;
-      color: #0f172a;
-      font-weight: 800;
-      padding: 8px 10px;
-      border-bottom: 1px solid #dbe3ef;
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      table-layout: fixed;
     }
-    .fields { padding: 8px 10px; }
-    .field { display: flex; gap: 8px; padding: 3px 0; }
-    .field strong { min-width: 82px; color: #475569; }
-    table { width: 100%; border-collapse: collapse; }
-    thead { display: table-header-group; }
-    tfoot { display: table-footer-group; }
-    tr { page-break-inside: avoid; break-inside: avoid; }
+
     th {
-      background: #0f172a;
-      color: #ffffff;
-      border: 1px solid #0f172a;
-      padding: 8px 6px;
+      background: #111;
+      color: white;
+      padding: 8px;
+      font-size: 11px;
       text-align: left;
-      font-size: 10px;
-      text-transform: uppercase;
+      border: 1px solid #111;
     }
+
     td {
-      border: 1px solid #cbd5e1;
-      padding: 7px 6px;
+      border: 1px solid #ccc;
+      padding: 8px;
       vertical-align: top;
-      word-break: break-word;
-      overflow-wrap: anywhere;
+      line-height: 1.35;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
-    .qty { width: 8%; text-align: center; }
-    .description { width: 42%; white-space: pre-wrap; }
-    .money { width: 14%; text-align: right; white-space: nowrap; }
-    .notes { width: 22%; white-space: pre-wrap; }
-    .empty-row { text-align: center; color: #64748b; padding: 18px; }
+
+    .col-cantidad {
+      width: 55px;
+      text-align: center;
+    }
+
+    .col-descripcion {
+      width: auto;
+    }
+
+    .col-precio {
+      width: 95px;
+      text-align: right;
+    }
+
+    .col-total {
+      width: 95px;
+      text-align: right;
+    }
+
     .totals {
-      width: 260px;
+      width: 280px;
       margin-left: auto;
-      margin-top: 14px;
-      page-break-inside: avoid;
-      break-inside: avoid;
+      margin-top: 18px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      overflow: hidden;
     }
-    .total-line {
+
+    .total-row {
       display: flex;
       justify-content: space-between;
-      border: 1px solid #cbd5e1;
-      border-bottom: 0;
       padding: 8px 10px;
+      border-bottom: 1px solid #ddd;
     }
-    .total-line:last-child {
-      border-bottom: 1px solid #cbd5e1;
-      background: #1d4ed8;
-      color: #ffffff;
-      font-size: 14px;
+
+    .total-row:last-child {
+      border-bottom: none;
+    }
+
+    .grand-total {
+      background: #111;
+      color: #fff;
+      font-size: 15px;
       font-weight: 800;
     }
-    .observations {
-      margin-top: 16px;
-      border: 1px solid #dbe3ef;
-      border-radius: 10px;
-      padding: 10px;
-      min-height: 54px;
-      white-space: pre-wrap;
-      page-break-inside: avoid;
-      break-inside: avoid;
+
+    .observaciones {
+      margin-top: 22px;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      min-height: 50px;
+      line-height: 1.4;
     }
+
     .footer {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: -10mm;
-      margin-top: 18px;
-      color: #64748b;
+      margin-top: 24px;
+      padding-top: 10px;
+      border-top: 1px solid #ddd;
       font-size: 10px;
-      border-top: 1px solid #e2e8f0;
-      padding-top: 8px;
+      color: #555;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    @page {
+      size: A4;
+      margin: 12mm 10mm;
     }
   </style>
 </head>
-<body>
-  <main class="document">
-    <header class="header">
-      <div>
-        <div class="brand-title">${htmlEscape(quote.empresaRubik)}</div>
-        <div class="tagline">El equipo que concreta tus ideas</div>
-        <div class="company-data">
-          <div>${htmlEscape(quote.direccionRubik)}</div>
-          <div>RUT: ${htmlEscape(quote.rutRubik)}</div>
-          <div>Tel: ${htmlEscape(quote.telefonoRubik)} | Email: ${htmlEscape(quote.emailRubik)}</div>
-        </div>
-      </div>
-      <div class="quote-box">
-        <div class="label">COTIZACION</div>
-        <div class="number">N&deg; ${htmlEscape(quote.numero)}</div>
-        <div class="date">${htmlEscape(quote.fecha)}</div>
-      </div>
-    </header>
 
-    <section class="section-grid">
-      <div class="section">
-        <div class="section-title">Datos del cliente</div>
-        <div class="fields">
-          <div class="field"><strong>Cliente</strong><span>${htmlEscape(quote.cliente)}</span></div>
-          <div class="field"><strong>RUT</strong><span>${htmlEscape(quote.rut)}</span></div>
-          <div class="field"><strong>Atencion</strong><span>${htmlEscape(quote.atencion)}</span></div>
-          <div class="field"><strong>Telefono</strong><span>${htmlEscape(quote.telefono)}</span></div>
-          <div class="field"><strong>Comuna</strong><span>${htmlEscape(quote.comuna)}</span></div>
-        </div>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <h1 class="brand-title">Rubik Creaciones</h1>
+        <div class="brand-subtitle">El equipo que concreta tus ideas</div>
       </div>
-      <div class="section">
-        <div class="section-title">Datos de cotizacion</div>
-        <div class="fields">
-          <div class="field"><strong>Tema</strong><span>${htmlEscape(quote.tema)}</span></div>
-          <div class="field"><strong>Condicion</strong><span>${htmlEscape(quote.condicion)}</span></div>
-          <div class="field"><strong>Vendedor</strong><span>${htmlEscape(quote.vendedor)}</span></div>
-          <div class="field"><strong>Fecha</strong><span>${htmlEscape(quote.fecha)}</span></div>
-        </div>
+
+      <div class="quote-meta">
+        <div class="quote-number">Cotización N° ${escapeHTML(data.numero || data.folio || '')}</div>
+        <div><strong>Fecha:</strong> ${escapeHTML(data.fecha || '')}</div>
+        <div><strong>Vendedor:</strong> ${escapeHTML(data.vendedor || '')}</div>
       </div>
-    </section>
+    </div>
+
+    <div class="client-grid">
+      <div class="field"><strong>Cliente:</strong> ${escapeHTML(data.cliente || data.razonSocial || '')}</div>
+      <div class="field"><strong>RUT:</strong> ${escapeHTML(data.rut || '')}</div>
+      <div class="field"><strong>Atención:</strong> ${escapeHTML(data.atencion || data.contacto || '')}</div>
+      <div class="field"><strong>Teléfono:</strong> ${escapeHTML(data.telefono || '')}</div>
+      <div class="field"><strong>Comuna:</strong> ${escapeHTML(data.comuna || '')}</div>
+      <div class="field"><strong>Condición:</strong> ${escapeHTML(data.condicion || data.condicionPago || '')}</div>
+    </div>
 
     <table>
       <thead>
         <tr>
-          <th class="qty">Cant.</th>
-          <th>Descripcion</th>
-          <th class="money">Valor unitario</th>
-          <th class="money">Total</th>
-          <th>Observaciones</th>
+          <th class="col-cantidad">Cant.</th>
+          <th class="col-descripcion">Descripción</th>
+          <th class="col-precio">Valor unit.</th>
+          <th class="col-total">Total</th>
         </tr>
       </thead>
+
       <tbody>
-        ${renderItemRows(quote.items)}
+        ${
+          items.length
+            ? items.map((item) => {
+                const cantidad = item.cantidad || item.qty || item.quantity || ''
+                const descripcion = item.descripcion || item.description || item.nombre || ''
+                const valorUnitario = Number(item.valorUnitario || item.precioUnitario || item.price || 0)
+                const totalItem = Number(item.total || item.valorTotal || valorUnitario * Number(cantidad || 0))
+
+                return `
+                  <tr>
+                    <td class="col-cantidad">${escapeHTML(cantidad)}</td>
+                    <td class="col-descripcion">${escapeHTML(descripcion)}</td>
+                    <td class="col-precio">${money(valorUnitario)}</td>
+                    <td class="col-total">${money(totalItem)}</td>
+                  </tr>
+                `
+              }).join('')
+            : `
+              <tr>
+                <td colspan="4">Sin ítems ingresados.</td>
+              </tr>
+            `
+        }
       </tbody>
     </table>
 
-    <section class="totals">
-      <div class="total-line"><strong>Neto</strong><span>${formatCurrency(quote.neto)}</span></div>
-      <div class="total-line"><strong>IVA 19%</strong><span>${formatCurrency(quote.iva)}</span></div>
-      <div class="total-line"><strong>Total</strong><span>${formatCurrency(quote.total)}</span></div>
-    </section>
+    <div class="totals">
+      <div class="total-row">
+        <span>Neto</span>
+        <strong>${money(neto)}</strong>
+      </div>
 
-    <section class="observations">
-      <strong>Observaciones</strong><br />
-      ${htmlEscape(quote.observaciones || 'Sin observaciones.')}
-    </section>
+      <div class="total-row">
+        <span>IVA 19%</span>
+        <strong>${money(iva)}</strong>
+      </div>
 
-    <footer class="footer">
-      Rubik Creaciones | Documento generado por ERP Rubik.
-    </footer>
-  </main>
+      <div class="total-row grand-total">
+        <span>Total</span>
+        <span>${money(total)}</span>
+      </div>
+    </div>
+
+    <div class="observaciones">
+      <strong>Observaciones:</strong><br />
+      ${escapeHTML(data.observaciones || '')}
+    </div>
+
+    <div class="footer">
+      <div>Rubik Creaciones SPA</div>
+      <div>Documento generado desde ERP Rubik</div>
+    </div>
+  </div>
 </body>
-</html>`
+</html>
+  `
 }
 
-module.exports = {
-  normalizeQuoteData,
-  renderCotizacionHTML,
-}
+module.exports = renderCotizacionHTML
