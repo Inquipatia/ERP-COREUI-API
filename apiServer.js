@@ -23,47 +23,30 @@ const dataAdapter = require('./services/dataAdapter')
 
 const PORT = process.env.PORT || process.env.API_PORT || 4300
 
-const normalizeOrigin = (origin = '') => String(origin).trim().replace(/\/+$/, '')
-const parseOrigins = (value = '') =>
-  String(value)
-    .split(',')
-    .map(normalizeOrigin)
-    .filter(Boolean)
-
 const allowedOrigins = [
-  ...parseOrigins(process.env.CORS_ORIGIN),
-  process.env.FRONTEND_ORIGIN,
   'https://erp.rubikcreaciones.com',
-  'http://localhost:4300',
   'http://localhost:5173',
+  'http://localhost:4300',
 ]
-  .map(normalizeOrigin)
-  .filter(Boolean)
 
 const corsOptions = {
   origin(origin, callback) {
-    const normalizedOrigin = normalizeOrigin(origin)
-    const isLocalDevelopmentOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(normalizedOrigin)
-
-    if (!origin || allowedOrigins.includes(normalizedOrigin) || isLocalDevelopmentOrigin) {
-      callback(null, true)
-      return
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true)
     }
 
-    callback(new Error(`CORS blocked: ${normalizedOrigin}`))
+    return callback(new Error(`Origen no permitido por CORS: ${origin}`))
   },
-  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: [
+    'Content-Disposition',
     'Content-Type',
-    'Authorization',
-    'X-User-Id',
-    'X-User-Name',
-    'X-User-Email',
-    'X-User-Role',
-    'X-User-Permissions',
+    'Content-Length',
+    'X-Rubik-Pdf-Fallback',
   ],
-  exposedHeaders: ['Content-Disposition', 'Content-Type', 'Content-Length'],
+  credentials: true,
+  optionsSuccessStatus: 204,
 }
 
 const app = express()
@@ -87,6 +70,10 @@ app.get('/health', (_request, response) => {
     db: adapterStatus.db,
     warning: adapterStatus.fallbackReason,
   })
+})
+
+app.get('/api/health', (_request, response) => {
+  response.json({ ok: true, service: 'rubik-api' })
 })
 
 app.use('/api/auth', authRoutes)
