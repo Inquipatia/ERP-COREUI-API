@@ -93,6 +93,8 @@ app.use('/api/materials', materialRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/dev', devRoutes)
 app.use('/api', pdfRoutes)
+console.log('PDF ROUTES MONTADAS EN /api')
+console.log('PDF ROUTE ACTIVA /api/export/pdf')
 app.use('/api/tender-analyzer', tenderAnalyzerRoutes)
 
 app.use('/api', (_request, response) => {
