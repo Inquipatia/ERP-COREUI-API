@@ -27,12 +27,13 @@ async function generateCotizacionPdfWithPuppeteer(data = {}) {
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
+      displayHeaderFooter: false,
       preferCSSPageSize: true,
       margin: {
-        top: '12mm',
-        right: '10mm',
-        bottom: '12mm',
-        left: '10mm',
+        top: '7mm',
+        right: '7mm',
+        bottom: '7mm',
+        left: '7mm',
       },
     })
 
