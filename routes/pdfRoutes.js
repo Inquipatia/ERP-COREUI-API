@@ -7,17 +7,19 @@ async function handleCotizacionPdf(req, res) {
   try {
     const data = req.body || {}
 
-    const pdfBuffer = await generateCotizacionPdfWithPuppeteer(data)
+    const pdfBuffer = Buffer.from(await generateCotizacionPdfWithPuppeteer(data))
 
-    const numero = data.numero || data.folio || 'rubik'
+    const numero = data.numero || data.folio || data.quoteNumber || data.quote?.quoteNumber || 'rubik'
 
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="cotizacion-${numero}.pdf"`
     )
+    res.setHeader('Content-Length', pdfBuffer.length)
+    res.setHeader('X-Rubik-Pdf-Generator', 'puppeteer-html')
 
-    return res.send(Buffer.from(pdfBuffer))
+    return res.send(pdfBuffer)
   } catch (error) {
     console.error('Error generando PDF con Puppeteer:', error)
 
@@ -29,6 +31,7 @@ async function handleCotizacionPdf(req, res) {
   }
 }
 
+router.post('/export/pdf', handleCotizacionPdf)
 router.post('/pdf', handleCotizacionPdf)
 router.post('/cotizacion', handleCotizacionPdf)
 router.post('/cotizacion/pdf', handleCotizacionPdf)
