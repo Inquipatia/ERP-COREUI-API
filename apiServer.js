@@ -22,7 +22,7 @@ const { attachUser, requireAuth } = require('./middleware/authMiddleware')
 const dataAdapter = require('./services/dataAdapter')
 
 
-const PORT = process.env.PORT || process.env.API_PORT || 4300
+const PORT = process.env.PORT || process.env.API_PORT || 3000
 
 const allowedOrigins = [
   'https://erp.rubikcreaciones.com',
@@ -94,13 +94,7 @@ app.use('/api/materials', materialRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/dev', devRoutes)
 app.use('/api', pdfRoutes)
-console.log('PDF ROUTES MONTADAS EN /api')
-console.log('PDF ROUTE ACTIVA /api/export/pdf')
 app.use('/api/tender-analyzer', tenderAnalyzerRoutes)
-app.use('/api', pdfRoutes)
-
-
-
 
 app.use('/api', (_request, response) => {
   response.status(404).json({ error: 'API route not found' })

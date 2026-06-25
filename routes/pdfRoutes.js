@@ -3,6 +3,14 @@ const generateCotizacionPdfWithPuppeteer = require('../utils/generateCotizacionP
 
 const router = express.Router()
 
+router.get('/export/pdf-health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'rubik-pdf',
+    generator: 'puppeteer-html',
+  })
+})
+
 async function handleCotizacionPdf(req, res) {
   try {
     const data = req.body || {}
