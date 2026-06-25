@@ -21,6 +21,7 @@ const pdfRoutes = require('./routes/pdfRoutes')
 const { attachUser, requireAuth } = require('./middleware/authMiddleware')
 const dataAdapter = require('./services/dataAdapter')
 
+
 const PORT = process.env.PORT || process.env.API_PORT || 4300
 
 const allowedOrigins = [
@@ -96,6 +97,10 @@ app.use('/api', pdfRoutes)
 console.log('PDF ROUTES MONTADAS EN /api')
 console.log('PDF ROUTE ACTIVA /api/export/pdf')
 app.use('/api/tender-analyzer', tenderAnalyzerRoutes)
+app.use('/api', pdfRoutes)
+
+
+
 
 app.use('/api', (_request, response) => {
   response.status(404).json({ error: 'API route not found' })
