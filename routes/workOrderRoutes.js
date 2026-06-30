@@ -1,5 +1,6 @@
 const express = require('express')
 const dataAdapter = require('../services/dataAdapter')
+const statisticsService = require('../services/statisticsService')
 const { requireAuth, requirePermission } = require('../middleware/authMiddleware')
 
 const router = express.Router()
@@ -7,6 +8,14 @@ const router = express.Router()
 router.get('/', requireAuth, requirePermission('workorders.view'), async (_request, response, next) => {
   try {
     response.json({ items: await dataAdapter.list('workOrders') })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/stats', requireAuth, requirePermission('workorders.view'), async (_request, response, next) => {
+  try {
+    response.json(await statisticsService.getWorkOrderStats())
   } catch (error) {
     next(error)
   }

@@ -1,12 +1,29 @@
 const express = require('express')
 const dataAdapter = require('../services/dataAdapter')
+const statisticsService = require('../services/statisticsService')
 const { requireAuth, requirePermission } = require('../middleware/authMiddleware')
 
 const router = express.Router()
 
 router.get('/summary', requireAuth, requirePermission('dashboard.view'), async (_request, response, next) => {
   try {
-    response.json(await dataAdapter.getDashboardSummary())
+    response.json(await statisticsService.getDashboardSummary())
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/stats', requireAuth, requirePermission('dashboard.view'), async (_request, response, next) => {
+  try {
+    response.json(await statisticsService.getDashboardStats())
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/activity', requireAuth, requirePermission('dashboard.view'), async (_request, response, next) => {
+  try {
+    response.json(await statisticsService.getDashboardActivity())
   } catch (error) {
     next(error)
   }

@@ -2,6 +2,17 @@ const fs = require('node:fs')
 const path = require('node:path')
 const PDFDocument = require('pdfkit')
 
+const PAGE_WIDTH = 595.28
+const PAGE_HEIGHT = 841.89
+const MARGIN = 24
+const CONTENT_WIDTH = 531
+const CONTENT_X = (PAGE_WIDTH - CONTENT_WIDTH) / 2
+const PAGE = {
+  size: 'A4',
+  layout: 'portrait',
+  margin: MARGIN,
+}
+
 const COLORS = {
   blue: '#201579',
   border: '#6D5CFF',
@@ -9,7 +20,7 @@ const COLORS = {
   lightPink: '#FCE8F4',
   text: '#182033',
   muted: '#5F53CF',
-  softGray: '#F7F7FB',
+  softGray: '#F2F2F2',
   white: '#FFFFFF',
 }
 
@@ -24,12 +35,45 @@ const COMPANY = {
 }
 
 const projectRoot = path.join(__dirname, '..', '..')
+const frontendProjectRoot = path.join(projectRoot, '..', 'coreui-free-react-admin-template')
 
 const logoCandidates = [
   path.join(projectRoot, 'public', 'templates', 'rubik-logo.png'),
   path.join(projectRoot, 'public', 'logo.png'),
   path.join(projectRoot, 'src', 'assets', 'brand', 'rubik-logo.png'),
+  path.join(frontendProjectRoot, 'public', 'templates', 'rubik-logo.png'),
+  path.join(frontendProjectRoot, 'public', 'logo.png'),
+  path.join(frontendProjectRoot, 'src', 'assets', 'brand', 'rubik-logo.png'),
 ]
+
+const fontCandidates = {
+  regular: [
+    'C:\\Windows\\Fonts\\arial.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+  ],
+  bold: [
+    'C:\\Windows\\Fonts\\arialbd.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+  ],
+}
+
+const FONTS = {
+  regular: 'Helvetica',
+  bold: 'Helvetica-Bold',
+}
+
+const table = {
+  x: CONTENT_X,
+  y: 318,
+  widths: [50, 245, 78, 78, 80],
+  headerHeight: 24,
+  minRowHeight: 20,
+  templateBottomY: 500,
+}
+
+const tableWidth = table.widths.reduce((sum, width) => sum + width, 0)
 
 const safeText = (value = '') => String(value ?? '').trim()
 
@@ -102,7 +146,24 @@ const getTotals = (quote = {}) => {
   return { netAmount, taxAmount, totalAmount }
 }
 
-const findLogoPath = () => logoCandidates.find((candidate) => fs.existsSync(candidate))
+const findExistingPath = (candidates) => candidates.find((candidate) => fs.existsSync(candidate))
+
+const findLogoPath = () => findExistingPath(logoCandidates)
+
+const registerFonts = (doc) => {
+  const regularPath = findExistingPath(fontCandidates.regular)
+  const boldPath = findExistingPath(fontCandidates.bold)
+
+  if (regularPath) {
+    doc.registerFont('RubikRegular', regularPath)
+    FONTS.regular = 'RubikRegular'
+  }
+
+  if (boldPath) {
+    doc.registerFont('RubikBold', boldPath)
+    FONTS.bold = 'RubikBold'
+  }
+}
 
 const rect = (doc, x, y, width, height, options = {}) => {
   doc.save()
@@ -113,7 +174,7 @@ const rect = (doc, x, y, width, height, options = {}) => {
 
   if (options.stroke) {
     doc
-      .lineWidth(options.lineWidth || 0.6)
+      .lineWidth(options.lineWidth || 0.55)
       .strokeColor(options.stroke)
       .rect(x, y, width, height)
       .stroke()
@@ -123,16 +184,21 @@ const rect = (doc, x, y, width, height, options = {}) => {
 }
 
 const text = (doc, value, x, y, options = {}) => {
+  const textOptions = {
+    width: options.width,
+    align: options.align || 'left',
+    lineGap: options.lineGap || 0,
+  }
+
+  if (options.height !== undefined) {
+    textOptions.height = options.height
+  }
+
   doc
     .fillColor(options.color || COLORS.text)
-    .font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+    .font(options.bold ? FONTS.bold : FONTS.regular)
     .fontSize(options.size || 9)
-    .text(safeText(value), x, y, {
-      width: options.width,
-      height: options.height,
-      align: options.align || 'left',
-      lineGap: options.lineGap || 0,
-    })
+    .text(safeText(value), x, y, textOptions)
 }
 
 const centerText = (doc, value, x, y, width, options = {}) =>
@@ -141,22 +207,24 @@ const centerText = (doc, value, x, y, width, options = {}) =>
 const rightText = (doc, value, x, y, width, options = {}) =>
   text(doc, value, x, y, { ...options, align: 'right', width })
 
+const pageBottom = (doc) => doc.page.height - MARGIN
+
 const drawFallbackLogo = (doc, x, y, width) => {
   centerText(doc, 'R U B I K', x, y, width, {
     color: COLORS.header,
-    size: 36,
+    size: 30,
     bold: true,
   })
 
-  centerText(doc, 'C R E A C I O N E S', x, y + 38, width, {
+  centerText(doc, 'C R E A C I O N E S', x, y + 31, width, {
     color: COLORS.blue,
-    size: 14,
+    size: 12,
     bold: true,
   })
 
-  centerText(doc, 'IMPRESIÓN - VOLUMÉTRICOS - STANDS - NEONFLEX Y MÁS', x, y + 62, width, {
+  centerText(doc, 'IMPRESIÓN - VOLUMÉTRICOS - STANDS - NEONFLEX Y MÁS', x, y + 52, width, {
     color: COLORS.header,
-    size: 8,
+    size: 7.4,
     bold: true,
   })
 }
@@ -165,63 +233,71 @@ const drawLabelValueRow = (doc, x, y, labelWidth, valueWidth, rowHeight, label, 
   rect(doc, x, y, labelWidth, rowHeight, { fill: COLORS.softGray, stroke: COLORS.border })
   rect(doc, x + labelWidth, y, valueWidth, rowHeight, { fill: COLORS.white, stroke: COLORS.border })
 
-  text(doc, label, x + 4, y + 6, {
+  text(doc, label, x + 4, y + 5.2, {
     bold: true,
     color: COLORS.blue,
-    size: 8,
+    size: 7.1,
     width: labelWidth - 8,
   })
 
-  centerText(doc, value, x + labelWidth + 4, y + 6, valueWidth - 8, {
+  centerText(doc, value, x + labelWidth + 4, y + 5.2, valueWidth - 8, {
     color: COLORS.text,
-    size: 8.5,
+    size: 7.7,
   })
 }
 
 const drawHeader = (doc, quote) => {
   const logoPath = findLogoPath()
-
-  const leftX = 24
+  const leftX = CONTENT_X
   const topY = 24
-  const leftWidth = 426
-  const rightX = 450
-  const rightWidth = 368
-  const rowHeight = 20
+  const quoteBlockWidth = 230
+  const quoteBlockX = CONTENT_X + CONTENT_WIDTH - quoteBlockWidth
+  const logoWidth = CONTENT_WIDTH - quoteBlockWidth - 8
+  const rowHeight = 19
 
   if (logoPath) {
     try {
-      doc.image(logoPath, leftX + 58, topY + 2, {
-        fit: [280, 88],
+      doc.image(logoPath, leftX + 5, topY + 2, {
+        fit: [logoWidth - 10, 90],
         align: 'center',
         valign: 'center',
       })
     } catch (_error) {
-      drawFallbackLogo(doc, leftX + 34, topY, 330)
+      drawFallbackLogo(doc, leftX, topY + 2, logoWidth)
     }
   } else {
-    drawFallbackLogo(doc, leftX + 34, topY, 330)
+    drawFallbackLogo(doc, leftX, topY + 2, logoWidth)
   }
 
-  rect(doc, rightX, topY, rightWidth, 72, {
+  rect(doc, quoteBlockX, topY, quoteBlockWidth, 50, {
     fill: COLORS.lightPink,
     stroke: COLORS.border,
-    lineWidth: 0.8,
+    lineWidth: 0.75,
   })
 
-  centerText(doc, 'COTIZACIÓN', rightX, topY + 18, rightWidth, {
+  centerText(doc, 'COTIZACIÓN', quoteBlockX, topY + 14, quoteBlockWidth, {
     bold: true,
     color: COLORS.blue,
-    size: 21,
+    size: 18,
   })
 
-  centerText(doc, `RUT: ${COMPANY.rut}`, rightX, topY + 55, rightWidth, {
+  rect(doc, quoteBlockX, topY + 50, quoteBlockWidth, 44, {
+    fill: COLORS.white,
+    stroke: COLORS.border,
+    lineWidth: 0.75,
+  })
+
+  centerText(doc, `RUT: ${COMPANY.rut}`, quoteBlockX, topY + 64, quoteBlockWidth, {
     bold: true,
     color: COLORS.blue,
-    size: 13,
+    size: 11.5,
   })
 
-  const leftLabel = 108
-  const rightLabel = 88
+  const leftWidth = 300
+  const rightWidth = CONTENT_WIDTH - leftWidth
+  const rightX = leftX + leftWidth
+  const leftLabel = 74
+  const rightLabel = 76
   const valueLeft = leftWidth - leftLabel
   const valueRight = rightWidth - rightLabel
   const baseY = 124
@@ -242,27 +318,17 @@ const drawHeader = (doc, quote) => {
   drawLabelValueRow(doc, rightX, baseY + rowHeight * 5, rightLabel, valueRight, rowHeight, 'COMUNA', quote.commune || quote.comuna)
   drawLabelValueRow(doc, rightX, baseY + rowHeight * 6, rightLabel, valueRight, rowHeight, 'CONDICIÓN', quote.condition || quote.condicion)
 
-  rect(doc, leftX, baseY + rowHeight * 7, leftWidth + rightWidth, 48, {
+  rect(doc, leftX, baseY + rowHeight * 7, CONTENT_WIDTH, 44, {
     fill: COLORS.lightPink,
     stroke: COLORS.border,
   })
 
-  centerText(doc, 'Cotización según solicitud', leftX, baseY + rowHeight * 7 + 16, leftWidth + rightWidth, {
+  centerText(doc, 'Cotización según solicitud', leftX, baseY + rowHeight * 7 + 13, CONTENT_WIDTH, {
     bold: true,
     color: COLORS.blue,
-    size: 15,
+    size: 13.5,
   })
 }
-
-const table = {
-  x: 24,
-  y: 332,
-  widths: [78, 394, 98, 114, 110],
-  headerHeight: 24,
-  minRowHeight: 22,
-}
-
-const tableWidth = table.widths.reduce((sum, width) => sum + width, 0)
 
 const drawTableHeader = (doc, y) => {
   const headers = [
@@ -283,10 +349,10 @@ const drawTableHeader = (doc, y) => {
       stroke: COLORS.border,
     })
 
-    centerText(doc, header, x + 4, y + 7, width - 8, {
+    centerText(doc, header, x + 3, y + 7, width - 6, {
       bold: true,
       color: COLORS.white,
-      size: 8.5,
+      size: index === 1 ? 7.3 : 6.8,
     })
 
     x += width
@@ -294,6 +360,8 @@ const drawTableHeader = (doc, y) => {
 }
 
 const getItemRowHeight = (doc, item) => {
+  doc.font(FONTS.regular).fontSize(7.2)
+
   const descriptionHeight = doc.heightOfString(itemDescription(item), {
     width: table.widths[1] - 10,
     lineGap: 1,
@@ -304,7 +372,19 @@ const getItemRowHeight = (doc, item) => {
     lineGap: 1,
   })
 
-  return Math.max(table.minRowHeight, descriptionHeight + 12, observationsHeight + 12)
+  return Math.max(table.minRowHeight, descriptionHeight + 10, observationsHeight + 10)
+}
+
+const drawEmptyItemRow = (doc, y, height = table.minRowHeight) => {
+  let x = table.x
+
+  table.widths.forEach((width) => {
+    rect(doc, x, y, width, height, {
+      fill: COLORS.white,
+      stroke: COLORS.border,
+    })
+    x += width
+  })
 }
 
 const drawItemRow = (doc, item, y, height) => {
@@ -326,12 +406,11 @@ const drawItemRow = (doc, item, y, height) => {
       stroke: COLORS.border,
     })
 
-    text(doc, cell.value, x + 5, y + 5, {
+    text(doc, cell.value, x + 5, y + 4.5, {
       align: cell.align,
       color: COLORS.text,
-      size: 8.3,
+      size: 7.2,
       width: width - 10,
-      height: height - 8,
       lineGap: 1,
     })
 
@@ -340,31 +419,38 @@ const drawItemRow = (doc, item, y, height) => {
 }
 
 const addContinuationPage = (doc) => {
-  doc.addPage({ size: 'A4', layout: 'landscape', margin: 24 })
+  doc.addPage(PAGE)
   drawTableHeader(doc, 34)
   return 34 + table.headerHeight
 }
 
+const drawTemplateEmptyRows = (doc, y) => {
+  let nextY = y
+
+  while (nextY + table.minRowHeight <= table.templateBottomY) {
+    drawEmptyItemRow(doc, nextY)
+    nextY += table.minRowHeight
+  }
+
+  return nextY
+}
+
 const drawItemsTable = (doc, quote) => {
   const items = getItems(quote)
-  const bottomLimit = doc.page.height - 38
+  const bottomLimit = pageBottom(doc) - 8
   let y = table.y
+  let usedContinuationPage = false
 
   drawTableHeader(doc, y)
   y += table.headerHeight
 
   if (!items.length) {
-    rect(doc, table.x, y, tableWidth, 30, {
-      fill: COLORS.white,
-      stroke: COLORS.border,
-    })
-
+    drawEmptyItemRow(doc, y, 30)
     centerText(doc, 'Sin ítems ingresados.', table.x, y + 9, tableWidth, {
       color: COLORS.text,
-      size: 9,
+      size: 8.5,
     })
-
-    return y + 30
+    return drawTemplateEmptyRows(doc, y + 30)
   }
 
   items.forEach((item) => {
@@ -372,64 +458,69 @@ const drawItemsTable = (doc, quote) => {
 
     if (y + rowHeight > bottomLimit) {
       y = addContinuationPage(doc)
+      usedContinuationPage = true
     }
 
     drawItemRow(doc, item, y, rowHeight)
     y += rowHeight
   })
 
+  if (!usedContinuationPage && items.length <= 5) {
+    return drawTemplateEmptyRows(doc, y)
+  }
+
   return y
 }
 
 const ensureSpace = (doc, y, neededHeight) => {
-  if (y + neededHeight <= doc.page.height - 28) return y
+  if (y + neededHeight <= pageBottom(doc)) return y
 
-  doc.addPage({ size: 'A4', layout: 'landscape', margin: 24 })
+  doc.addPage(PAGE)
   return 34
 }
 
 const drawBottomBlocks = (doc, quote, startY) => {
   const { netAmount, taxAmount, totalAmount } = getTotals(quote)
-
-  let y = ensureSpace(doc, Math.max(startY + 10, 412), 145)
-
-  const x = 24
-  const transferWidth = 432
+  const x = table.x
+  const transferWidth = 300
   const totalsX = x + transferWidth
   const totalsWidth = tableWidth - transferWidth
-  const rowHeight = 27
+  const totalLabelWidth = 74
+  const rowHeight = 22
 
-  rect(doc, x, y, tableWidth, 20, {
+  let y = ensureSpace(doc, startY, 245)
+
+  rect(doc, x, y, tableWidth, 16, {
     fill: COLORS.lightPink,
     stroke: COLORS.border,
   })
 
-  y += 20
+  y += 16
 
   rect(doc, x, y, transferWidth, rowHeight * 4, {
     fill: COLORS.white,
     stroke: COLORS.border,
   })
 
-  centerText(doc, 'DATOS DE TRANSFERENCIA', x, y + 11, transferWidth, {
+  centerText(doc, 'DATOS DE TRANSFERENCIA', x, y + 9, transferWidth, {
     bold: true,
     color: COLORS.blue,
-    size: 11,
+    size: 9.7,
   })
 
-  centerText(doc, COMPANY.bank, x, y + 39, transferWidth, {
+  centerText(doc, COMPANY.bank, x, y + 33, transferWidth, {
     color: COLORS.muted,
-    size: 10,
+    size: 8.1,
   })
 
-  centerText(doc, COMPANY.transferContact, x, y + 64, transferWidth, {
+  centerText(doc, COMPANY.transferContact, x, y + 53, transferWidth, {
     color: COLORS.muted,
-    size: 10,
+    size: 8.1,
   })
 
-  centerText(doc, COMPANY.website, x, y + 89, transferWidth, {
+  centerText(doc, COMPANY.website, x, y + 73, transferWidth, {
     color: COLORS.muted,
-    size: 10,
+    size: 8.1,
   })
 
   const totalRows = [
@@ -441,46 +532,46 @@ const drawBottomBlocks = (doc, quote, startY) => {
   totalRows.forEach(([label, value, highlight], index) => {
     const rowY = y + index * rowHeight
 
-    rect(doc, totalsX, rowY, 88, rowHeight, {
+    rect(doc, totalsX, rowY, totalLabelWidth, rowHeight, {
       fill: highlight ? COLORS.lightPink : COLORS.softGray,
       stroke: COLORS.border,
     })
 
-    rect(doc, totalsX + 88, rowY, totalsWidth - 88, rowHeight, {
+    rect(doc, totalsX + totalLabelWidth, rowY, totalsWidth - totalLabelWidth, rowHeight, {
       fill: highlight ? COLORS.lightPink : COLORS.white,
       stroke: COLORS.border,
     })
 
-    text(doc, label, totalsX + 5, rowY + 8, {
+    text(doc, label, totalsX + 5, rowY + 6.2, {
       bold: true,
       color: COLORS.blue,
-      size: highlight ? 12 : 10.5,
-      width: 78,
+      size: highlight ? 10.3 : 9.1,
+      width: totalLabelWidth - 10,
     })
 
-    rightText(doc, value, totalsX + 94, rowY + 8, totalsWidth - 100, {
+    rightText(doc, value, totalsX + totalLabelWidth + 5, rowY + 6.2, totalsWidth - totalLabelWidth - 10, {
       bold: true,
       color: COLORS.blue,
-      size: highlight ? 12 : 10.5,
+      size: highlight ? 10.3 : 9.1,
     })
   })
 
   y += rowHeight * 4
-  y = ensureSpace(doc, y + 10, 78)
+  y = ensureSpace(doc, y + 8, 76)
 
-  rect(doc, x, y, tableWidth, 28, {
+  rect(doc, x, y, tableWidth, 22, {
     fill: COLORS.lightPink,
     stroke: COLORS.border,
   })
 
-  text(doc, 'Notas comerciales', x + 5, y + 8, {
+  text(doc, 'Notas comerciales', x + 5, y + 6.5, {
     bold: true,
     color: COLORS.blue,
-    size: 11,
+    size: 9.5,
     width: tableWidth - 10,
   })
 
-  rect(doc, x, y + 28, tableWidth, 48, {
+  rect(doc, x, y + 22, tableWidth, 54, {
     fill: COLORS.white,
     stroke: COLORS.border,
   })
@@ -489,10 +580,10 @@ const drawBottomBlocks = (doc, quote, startY) => {
     doc,
     '• Valores incluyen IVA, salvo indicación contraria. • Plazo de entrega sujeto a aprobación de arte y disponibilidad de materiales. • Instalación/despacho se considera solo si está indicado en la descripción.',
     x + 6,
-    y + 38,
+    y + 32,
     {
       color: COLORS.text,
-      size: 9,
+      size: 7.7,
       width: tableWidth - 12,
       lineGap: 2,
     },
@@ -501,27 +592,33 @@ const drawBottomBlocks = (doc, quote, startY) => {
   const observations = safeText(quote.observations || quote.observaciones)
 
   if (observations) {
-    const obsY = ensureSpace(doc, y + 88, 62)
+    doc.font(FONTS.regular).fontSize(7.8)
+    const observationTextHeight = doc.heightOfString(observations, {
+      width: tableWidth - 12,
+      lineGap: 1,
+    })
+    const observationHeight = Math.max(44, observationTextHeight + 30)
+    const obsY = ensureSpace(doc, y + 84, observationHeight)
 
-    rect(doc, x, obsY, tableWidth, 22, {
+    rect(doc, x, obsY, tableWidth, 21, {
       fill: COLORS.lightPink,
       stroke: COLORS.border,
     })
 
-    text(doc, 'Observaciones', x + 5, obsY + 7, {
+    text(doc, 'Observaciones', x + 5, obsY + 6.5, {
       bold: true,
       color: COLORS.blue,
-      size: 10,
+      size: 9.5,
     })
 
-    rect(doc, x, obsY + 22, tableWidth, 40, {
+    rect(doc, x, obsY + 21, tableWidth, observationHeight - 21, {
       fill: COLORS.white,
       stroke: COLORS.border,
     })
 
-    text(doc, observations, x + 6, obsY + 30, {
+    text(doc, observations, x + 6, obsY + 29, {
       color: COLORS.text,
-      size: 8.8,
+      size: 7.8,
       width: tableWidth - 12,
       lineGap: 1,
     })
@@ -531,11 +628,11 @@ const drawBottomBlocks = (doc, quote, startY) => {
 const generateCotizacionPdfWithPdfkit = async (quote = {}) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({
-      size: 'A4',
-      layout: 'landscape',
-      margin: 24,
+      ...PAGE,
       bufferPages: false,
     })
+
+    registerFonts(doc)
 
     const chunks = []
 

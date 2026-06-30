@@ -22,7 +22,7 @@ const { attachUser, requireAuth } = require('./middleware/authMiddleware')
 const dataAdapter = require('./services/dataAdapter')
 
 
-const PORT = process.env.PORT || process.env.API_PORT || 3000
+const PORT = process.env.PORT || process.env.API_PORT || 4300
 
 const allowedOrigins = [
   'https://erp.rubikcreaciones.com',
