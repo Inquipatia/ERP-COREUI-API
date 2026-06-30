@@ -1,7 +1,7 @@
 require('dotenv').config({ quiet: true })
 
-const prismaAdapter = require('../services/postgresDataAdapter')
-const { getPrisma } = require('../services/prismaClient')
+const prismaAdapter = require('../services/prismaDataAdapter')
+const { disconnectPrisma } = require('../services/prismaClient')
 
 const main = async () => {
   const result = await prismaAdapter.seedInitialData()
@@ -14,9 +14,5 @@ main()
     process.exitCode = 1
   })
   .finally(async () => {
-    try {
-      await getPrisma().$disconnect()
-    } catch (_error) {
-      // Si DATABASE_URL falta, el error principal ya fue reportado.
-    }
+    await disconnectPrisma().catch(() => {})
   })

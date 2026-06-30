@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { calculateFinanceMovement, getNumberValue, registerMovementPayment } = require('../utils/financeCalculations')
+const { verifyPassword } = require('./passwordUtils')
 const { getPrisma } = require('./prismaClient')
 
 const TEMP_DEV_PASSWORD = '123456'
@@ -236,7 +237,7 @@ const toNumber = (value) => Number(value || 0)
 const emptyToNull = (value) => (value === '' || value === undefined ? null : value)
 
 const sanitizeUser = (user = {}) => {
-  const { password, ...safeUser } = user
+  const { password, passwordHash, ...safeUser } = user
   return safeUser
 }
 
@@ -549,6 +550,7 @@ const normalizeForPrisma = (key, payload = {}) => {
       name: payload.name || '',
       email: String(payload.email || '').trim().toLowerCase(),
       password: payload.password || TEMP_DEV_PASSWORD,
+      passwordHash: payload.passwordHash || payload.payload?.passwordHash,
       role: payload.role || payload.position || 'Ventas',
       status: payload.status || 'Activo',
       position: payload.position || payload.role || '',
@@ -1079,13 +1081,13 @@ const login = async ({ email, password }) => {
   const normalizedEmail = String(email || '').trim().toLowerCase()
   const prisma = getPrisma()
 
-  if ((await prisma.user.count()) === 0) {
-    await seedInitialData()
-  }
-
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
+  const status = normalizeText(user?.status || '')
+  const hasValidHash = user?.passwordHash ? verifyPassword(password, user.passwordHash) : false
+  const hasValidPlainPassword =
+    !user?.passwordHash && String(user?.password || TEMP_DEV_PASSWORD) === String(password || '')
 
-  if (!user || user.status !== 'Activo' || String(user.password || TEMP_DEV_PASSWORD) !== String(password || '')) {
+  if (!user || status !== 'activo' || (!hasValidHash && !hasValidPlainPassword)) {
     const error = new Error('Credenciales invalidas.')
     error.statusCode = 401
     throw error
@@ -1383,6 +1385,7 @@ const getCounts = async () => {
     users,
     clients,
     quotes,
+    quoteItems,
     documents,
     tenders,
     workOrders,
@@ -1396,6 +1399,7 @@ const getCounts = async () => {
       prisma.user.count(),
       prisma.client.count(),
       prisma.quote.count(),
+      prisma.quoteItem.count(),
       prisma.document.count(),
       prisma.tender.count(),
       prisma.workOrder.count(),
@@ -1410,6 +1414,7 @@ const getCounts = async () => {
     users,
     clients,
     quotes,
+    quoteItems,
     documents,
     tenders,
     workOrders,

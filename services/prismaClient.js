@@ -14,6 +14,7 @@ const assertDatabaseUrl = () => {
 
 let PrismaClient
 let prismaInstance
+let shutdownHandlersRegistered = false
 
 const loadPrismaClient = () => {
   if (PrismaClient) return PrismaClient
@@ -51,11 +52,51 @@ const getPrisma = () => {
     globalForPrisma.rubikPrismaClient = prismaInstance
   }
 
+  registerShutdownHandlers()
+
   return prismaInstance
+}
+
+const disconnectPrisma = async () => {
+  if (!prismaInstance) return
+
+  await prismaInstance.$disconnect()
+  prismaInstance = null
+
+  if (globalThis.rubikPrismaClient) {
+    globalThis.rubikPrismaClient = null
+  }
+}
+
+const registerShutdownHandlers = () => {
+  if (shutdownHandlersRegistered || process.env.RUBIK_SKIP_PRISMA_SHUTDOWN_HANDLERS === 'true') {
+    return
+  }
+
+  shutdownHandlersRegistered = true
+
+  const shutdown = async () => {
+    try {
+      await disconnectPrisma()
+    } catch (error) {
+      console.error('Error desconectando Prisma:', error)
+    }
+  }
+
+  process.once('beforeExit', shutdown)
+  process.once('SIGINT', async () => {
+    await shutdown()
+    process.exit(0)
+  })
+  process.once('SIGTERM', async () => {
+    await shutdown()
+    process.exit(0)
+  })
 }
 
 module.exports = {
   assertDatabaseUrl,
+  disconnectPrisma,
   getPrisma,
   get prisma() {
     return getPrisma()

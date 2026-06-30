@@ -20,6 +20,7 @@ const devRoutes = require('./routes/devRoutes')
 const pdfRoutes = require('./routes/pdfRoutes')
 const assistantRoutes = require('./routes/assistantRoutes')
 const { attachUser, requireAuth } = require('./middleware/authMiddleware')
+const { checkDatabaseHealth, checkProductionReadiness } = require('./services/checkDatabaseHealth')
 const dataAdapter = require('./services/dataAdapter')
 
 
@@ -76,6 +77,24 @@ app.get('/health', (_request, response) => {
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true, service: 'rubik-api' })
+})
+
+app.get('/api/health/db', async (_request, response, next) => {
+  try {
+    const result = await checkDatabaseHealth()
+    response.status(result.ok ? 200 : 503).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/health/production-readiness', async (_request, response, next) => {
+  try {
+    const result = await checkProductionReadiness()
+    response.status(result.ok ? 200 : 503).json(result)
+  } catch (error) {
+    next(error)
+  }
 })
 
 app.use('/api/auth', authRoutes)

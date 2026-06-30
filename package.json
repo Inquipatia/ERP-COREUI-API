@@ -6,10 +6,18 @@
   "main": "apiServer.js",
   "scripts": {
     "start": "node apiServer.js",
-    "build": "prisma generate",
-    "db:generate": "prisma generate",
+    "build": "npm run prisma:generate",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:migrate:status": "prisma migrate status --schema prisma/schema.prisma",
+    "prisma:studio": "prisma studio --schema prisma/schema.prisma",
+    "db:generate": "npm run prisma:generate",
     "db:push": "prisma db push",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "db:seed-users": "node services/seedProductionUsers.js",
+    "db:migrate-json": "node services/migrateJsonToMysql.js",
+    "db:health": "node services/checkDatabaseHealth.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

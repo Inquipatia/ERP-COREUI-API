@@ -904,6 +904,10 @@ const getCounts = () => ({
   users: list('users').length,
   clients: list('clients').length,
   quotes: list('quotes').length,
+  quoteItems: list('quotes').reduce(
+    (total, quote) => total + (Array.isArray(quote.quoteItems) ? quote.quoteItems.length : Array.isArray(quote.items) ? quote.items.length : 0),
+    0,
+  ),
   documents: list('documents').length,
   tenders: list('tenders').length,
   workOrders: list('workOrders').length,
@@ -938,16 +942,18 @@ const getRequestedAdapterMode = () =>
   String(process.env.DATA_ADAPTER_MODE || process.env.RUBIK_DATA_ADAPTER || '').trim().toLowerCase()
 
 const requestedAdapterMode = getRequestedAdapterMode()
-const forceJsonAdapter = ['json', 'file', 'local', 'mock'].includes(requestedAdapterMode)
-const shouldUsePrismaAdapter = !forceJsonAdapter
+const shouldUsePrismaAdapter = requestedAdapterMode === 'prisma'
+const shouldUseJsonAdapter = !requestedAdapterMode || ['json', 'file', 'local', 'mock'].includes(requestedAdapterMode)
 
 let prismaDataAdapter = null
 let activeAdapterMode = shouldUsePrismaAdapter ? 'prisma' : 'json'
-let adapterFallbackReason = forceJsonAdapter ? 'json mode selected explicitly; database disabled' : ''
+let adapterFallbackReason = shouldUseJsonAdapter
+  ? ''
+  : `unsupported RUBIK_DATA_ADAPTER="${requestedAdapterMode}"; using json`
 
 const loadPrismaDataAdapter = () => {
   if (!prismaDataAdapter) {
-    prismaDataAdapter = require('./postgresDataAdapter')
+    prismaDataAdapter = require('./prismaDataAdapter')
   }
 
   return prismaDataAdapter
@@ -980,10 +986,11 @@ const getUserByTokenWithFallback = (token) => {
 
 const getAdapterStatus = () => ({
   db: activeAdapterMode === 'prisma' ? 'mysql' : 'json-file',
-  fallbackReason: activeAdapterMode === 'json' ? adapterFallbackReason : undefined,
+  fallbackReason: adapterFallbackReason || undefined,
+  hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
   mode: activeAdapterMode,
   provider: activeAdapterMode === 'prisma' ? 'prisma/mysql' : 'json',
-  requestedMode: requestedAdapterMode || 'prisma-default',
+  requestedMode: requestedAdapterMode || 'json-default',
   source: activeAdapterMode === 'prisma' ? 'database' : 'local-json',
 })
 
