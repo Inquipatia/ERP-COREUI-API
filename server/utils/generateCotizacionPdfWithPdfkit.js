@@ -1,6 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const PDFDocument = require('pdfkit')
+const ExcelJS = require('exceljs')
 
 const PAGE_WIDTH = 595.28
 const PAGE_HEIGHT = 841.89
@@ -36,14 +37,29 @@ const COMPANY = {
 
 const projectRoot = path.join(__dirname, '..', '..')
 const frontendProjectRoot = path.join(projectRoot, '..', 'coreui-free-react-admin-template')
+const extractedLogoPath = path.join(projectRoot, 'public', 'templates', 'rubik-logo.png')
 
 const logoCandidates = [
   path.join(projectRoot, 'public', 'templates', 'rubik-logo.png'),
+  path.join(projectRoot, 'public', 'templates', 'logo-rubik.png'),
   path.join(projectRoot, 'public', 'logo.png'),
-  path.join(projectRoot, 'src', 'assets', 'brand', 'rubik-logo.png'),
+  path.join(projectRoot, 'assets', 'rubik-logo.png'),
+  path.join(projectRoot, 'server', 'assets', 'rubik-logo.png'),
+]
+
+const devLogoCandidates = [
   path.join(frontendProjectRoot, 'public', 'templates', 'rubik-logo.png'),
+  path.join(frontendProjectRoot, 'public', 'templates', 'logo-rubik.png'),
   path.join(frontendProjectRoot, 'public', 'logo.png'),
+  path.join(frontendProjectRoot, 'assets', 'rubik-logo.png'),
+  path.join(frontendProjectRoot, 'server', 'assets', 'rubik-logo.png'),
   path.join(frontendProjectRoot, 'src', 'assets', 'brand', 'rubik-logo.png'),
+]
+
+const templateCandidates = [
+  path.join(projectRoot, 'public', 'templates', 'cotizacion-rubik.xlsx'),
+  path.join(projectRoot, 'templates', 'cotizacion-rubik.xlsx'),
+  path.join(frontendProjectRoot, 'public', 'templates', 'cotizacion-rubik.xlsx'),
 ]
 
 const fontCandidates = {
@@ -96,8 +112,12 @@ const formatCurrency = (value) =>
 
 const formatDate = (value) => {
   if (!value) return ''
+  const rawValue = safeText(value)
+  const isoDateMatch = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (isoDateMatch) return `${isoDateMatch[3]}-${isoDateMatch[2]}-${isoDateMatch[1]}`
+
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return safeText(value)
+  if (Number.isNaN(date.getTime())) return rawValue
 
   return new Intl.DateTimeFormat('es-CL', {
     day: '2-digit',
@@ -148,7 +168,25 @@ const getTotals = (quote = {}) => {
 
 const findExistingPath = (candidates) => candidates.find((candidate) => fs.existsSync(candidate))
 
-const findLogoPath = () => findExistingPath(logoCandidates)
+const extractLogoFromTemplate = async () => {
+  const templatePath = findExistingPath(templateCandidates)
+  if (!templatePath) return ''
+
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.readFile(templatePath)
+
+  const media = workbook.model?.media || []
+  const image = media.find((item) => item.type === 'image' && item.buffer)
+  if (!image) return ''
+
+  fs.mkdirSync(path.dirname(extractedLogoPath), { recursive: true })
+  fs.writeFileSync(extractedLogoPath, image.buffer)
+
+  return extractedLogoPath
+}
+
+const resolveLogoPath = async () =>
+  findExistingPath(logoCandidates) || (await extractLogoFromTemplate()) || findExistingPath(devLogoCandidates)
 
 const registerFonts = (doc) => {
   const regularPath = findExistingPath(fontCandidates.regular)
@@ -246,8 +284,7 @@ const drawLabelValueRow = (doc, x, y, labelWidth, valueWidth, rowHeight, label, 
   })
 }
 
-const drawHeader = (doc, quote) => {
-  const logoPath = findLogoPath()
+const drawHeader = (doc, quote, logoPath) => {
   const leftX = CONTENT_X
   const topY = 24
   const quoteBlockWidth = 230
@@ -625,8 +662,10 @@ const drawBottomBlocks = (doc, quote, startY) => {
   }
 }
 
-const generateCotizacionPdfWithPdfkit = async (quote = {}) =>
-  new Promise((resolve, reject) => {
+const generateCotizacionPdfWithPdfkit = async (quote = {}) => {
+  const logoPath = await resolveLogoPath()
+
+  return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       ...PAGE,
       bufferPages: false,
@@ -641,7 +680,7 @@ const generateCotizacionPdfWithPdfkit = async (quote = {}) =>
     doc.on('error', reject)
 
     try {
-      drawHeader(doc, quote)
+      drawHeader(doc, quote, logoPath)
       const tableEndY = drawItemsTable(doc, quote)
       drawBottomBlocks(doc, quote, tableEndY)
       doc.end()
@@ -649,6 +688,7 @@ const generateCotizacionPdfWithPdfkit = async (quote = {}) =>
       reject(error)
     }
   })
+}
 
 module.exports = {
   generateCotizacionPdfWithPdfkit,
