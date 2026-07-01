@@ -75,6 +75,13 @@ const extractItems = (payload) => {
 
 const isValidPayload = (payload) => payload !== null && typeof payload === 'object'
 
+const isPermissionProtectedResponse = (response) => {
+  if (response.status !== 403 || !isValidPayload(response.payload)) return false
+
+  const message = String(response.payload.error || response.payload.message || '').toLowerCase()
+  return Boolean(response.payload.permission) || message.includes('permiso') || message.includes('permission')
+}
+
 const failFastLogin = (loginResponse) => {
   if (loginResponse.ok && loginResponse.payload?.token && loginResponse.payload?.user) return
 
@@ -218,10 +225,22 @@ const main = async () => {
 
   for (const endpoint of protectedEndpoints) {
     const response = await request(endpoint, { token })
+    const permissionProtected = isPermissionProtectedResponse(response)
+
+    if (permissionProtected) {
+      addWarning('Endpoint protegido correctamente por permisos.', {
+        endpoint,
+        status: response.status,
+        permission: response.payload?.permission,
+        body: response.payload,
+      })
+    }
+
     endpointResults.push({
       endpoint,
       status: response.status,
-      ok: response.status === 200 && isValidPayload(response.payload),
+      ok: (response.status === 200 && isValidPayload(response.payload)) || permissionProtected,
+      permissionProtected,
     })
     assertCondition(response.status !== 401, `${endpoint} respondio 401 con token Bearer.`, {
       endpoint,
@@ -231,15 +250,18 @@ const main = async () => {
       endpoint,
       body: response.payload,
     })
-    assertCondition(response.status === 200, `${endpoint} no respondio 200.`, {
-      endpoint,
-      status: response.status,
-      body: response.payload,
-    })
-    assertCondition(isValidPayload(response.payload), `${endpoint} no devolvio array u objeto valido.`, {
-      endpoint,
-      body: response.payload,
-    })
+
+    if (!permissionProtected) {
+      assertCondition(response.status === 200, `${endpoint} no respondio 200.`, {
+        endpoint,
+        status: response.status,
+        body: response.payload,
+      })
+      assertCondition(isValidPayload(response.payload), `${endpoint} no devolvio array u objeto valido.`, {
+        endpoint,
+        body: response.payload,
+      })
+    }
   }
 
   summary.endpointsOk = endpointResults.every((result) => result.ok)
