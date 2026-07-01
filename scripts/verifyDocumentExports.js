@@ -27,6 +27,21 @@ const addFailure = (message, details = {}) => {
 
 const buildUrl = (endpoint) => `${apiUrl}${String(endpoint).startsWith('/') ? endpoint : `/${endpoint}`}`
 
+function extractToken(loginResponse) {
+  return loginResponse?.token
+    || loginResponse?.accessToken
+    || loginResponse?.sessionToken
+    || loginResponse?.data?.token
+    || loginResponse?.data?.accessToken
+    || null
+}
+
+function authHeaders(token) {
+  return {
+    Authorization: `Bearer ${token}`,
+  }
+}
+
 const parsePayload = async (response) => {
   const contentType = response.headers.get('content-type') || ''
   if (contentType.includes('application/json')) return response.json().catch(() => null)
@@ -38,7 +53,7 @@ const requestJson = async (endpoint, { method = 'GET', token, body } = {}) => {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token ? authHeaders(token) : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
@@ -52,7 +67,7 @@ const requestJson = async (endpoint, { method = 'GET', token, body } = {}) => {
 
 const requestFile = async (endpoint, { token, expectedContentType, label } = {}) => {
   const response = await fetch(buildUrl(endpoint), {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: token ? authHeaders(token) : {},
   })
   const responseForError = response.clone()
   const contentType = response.headers.get('content-type') || ''
@@ -110,12 +125,22 @@ const main = async () => {
       password: testPassword,
     },
   })
-  const token = login.payload?.token
-  const userEmail = String(login.payload?.user?.email || '').toLowerCase()
+  const token = extractToken(login.payload)
+  if (!token) {
+    addFailure('No se encontró token en la respuesta de login.', { status: login.status })
+    return
+  }
+
+  const loginUser = login.payload?.user || login.payload?.data?.user || null
+  const userEmail = String(loginUser?.email || '').toLowerCase()
   summary.loginOk = login.status === 200 && Boolean(token) && userEmail === testEmail.toLowerCase()
 
   if (!summary.loginOk) {
-    addFailure('Login fallo.', { status: login.status, body: login.payload })
+    addFailure('Login fallo.', {
+      status: login.status,
+      hasToken: Boolean(token),
+      userEmailMatches: userEmail === testEmail.toLowerCase(),
+    })
     return
   }
 
