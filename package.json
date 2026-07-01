@@ -21,7 +21,6 @@
     "verify:prod-prisma": "node scripts/verifyProductionPrisma.js",
     "verify:document-exports": "node scripts/verifyDocumentExports.js",
     "verify:sandbox-payment": "node scripts/verifySandboxPayment.js",
-    "verify:transbank-sandbox": "node scripts/verifyTransbankSandboxPayment.js",
     "finance:grant-demo-permissions": "node scripts/grantFinanceDemoPermissions.js"
   },
   "dependencies": {

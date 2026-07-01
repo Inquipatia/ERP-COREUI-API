@@ -412,9 +412,6 @@ const createPayment = async (payload = {}, user = {}) => {
   const provider = String(payload.provider || payload.paymentProvider || getConfiguredProviderName()).toLowerCase()
   const status = normalizePaymentStatus(payload.status || 'pending')
   const method = payload.method || payload.paymentMethod || provider
-  const isSandboxPayment =
-    provider === 'sandbox' ||
-    (provider === 'transbank' && String(process.env.TRANSBANK_ENV || 'integration').toLowerCase() !== 'production')
 
   if (amount <= 0) throw createError('El pago debe ser mayor a 0.', 400)
   if (amount > movement.pendingAmount) {
@@ -429,12 +426,12 @@ const createPayment = async (payload = {}, user = {}) => {
     provider,
     status,
     providerStatus: payload.providerStatus || status,
-    sandbox: isSandboxPayment,
+    sandbox: provider === 'sandbox',
     paymentsMode: getPaymentsMode(),
     metadata: {
       ...(isPlainObject(payload.metadata) ? payload.metadata : {}),
       source: payload.source || '',
-      testPrefix: isSandboxPayment ? TEST_PAYMENT_PREFIX : undefined,
+      testPrefix: ['sandbox', 'transbank'].includes(provider) ? TEST_PAYMENT_PREFIX : undefined,
     },
     createdById: user?.id || '',
     createdByEmail: user?.email || '',
@@ -475,7 +472,7 @@ const createPayment = async (payload = {}, user = {}) => {
     null,
     status,
     user,
-    { provider, sandbox: isSandboxPayment },
+    { provider, sandbox: provider === 'sandbox' },
   )
   const payment = await getPaymentById(createdPayment.id)
 
