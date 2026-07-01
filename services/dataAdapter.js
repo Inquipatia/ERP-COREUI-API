@@ -22,6 +22,10 @@ const PERMISSIONS = [
   'tenders.view',
   'workorders.view',
   'workorders.create',
+  'workorders.update',
+  'workorders.assign',
+  'workorders.complete',
+  'workorders.delete',
   'users.view',
   'users.manage',
   'finance.view',
@@ -91,6 +95,8 @@ const getPermissionsForRole = (role = '', email = '') => {
       'documents.view',
       'tenders.view',
       'workorders.view',
+      'workorders.create',
+      'workorders.update',
       'finance.view',
       'finance.create',
       'finance.update',
@@ -122,6 +128,7 @@ const getPermissionsForRole = (role = '', email = '') => {
       'tenders.view',
       'workorders.view',
       'workorders.create',
+      'workorders.update',
       'products.view',
       'products.manage',
       'materials.view',
@@ -135,6 +142,9 @@ const getPermissionsForRole = (role = '', email = '') => {
       'documents.view',
       'workorders.view',
       'workorders.create',
+      'workorders.update',
+      'workorders.assign',
+      'workorders.complete',
       'products.view',
       'materials.view',
       'materials.manage',
@@ -142,7 +152,7 @@ const getPermissionsForRole = (role = '', email = '') => {
     ])
   }
 
-  return withFinanceDemoPermissions(['dashboard.view', 'documents.view', 'workorders.view', 'ai.chat'])
+  return withFinanceDemoPermissions(['dashboard.view', 'documents.view', 'workorders.view', 'workorders.create', 'ai.chat'])
 }
 
 const sanitizeUser = (user) => {

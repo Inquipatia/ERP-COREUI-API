@@ -92,13 +92,104 @@ const getTenderStatus = (tender = {}) => tender.status || tender.estado || 'Dete
 
 const getTenderRisk = (tender = {}) => tender.riskLevel || tender.riesgo || 'Sin riesgo'
 
-const getWorkOrderStatus = (workOrder = {}) => workOrder.status || workOrder.estado || 'Pendiente'
+const normalizeComparableText = (value = '') =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const WORK_ORDER_STATUS_LABELS = {
+  draft: 'Borrador',
+  pending: 'Pendiente',
+  assigned: 'Recibida',
+  in_progress: 'En proceso',
+  paused: 'Pausada',
+  completed: 'Finalizada',
+  cancelled: 'Rechazada',
+}
+
+const WORK_ORDER_STATUS_ALIASES = {
+  borrador: 'draft',
+  draft: 'draft',
+  pendiente: 'pending',
+  pending: 'pending',
+  recibida: 'assigned',
+  assigned: 'assigned',
+  asignada: 'assigned',
+  'en proceso': 'in_progress',
+  en_proceso: 'in_progress',
+  in_progress: 'in_progress',
+  'solicita antecedentes': 'in_progress',
+  'en revision': 'in_progress',
+  'devuelta con observaciones': 'in_progress',
+  pausada: 'paused',
+  paused: 'paused',
+  aprobada: 'completed',
+  finalizada: 'completed',
+  completada: 'completed',
+  completed: 'completed',
+  rechazada: 'cancelled',
+  cancelada: 'cancelled',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+}
+
+const WORK_ORDER_PRIORITY_LABELS = {
+  baja: 'Baja',
+  media: 'Media',
+  alta: 'Alta',
+  urgente: 'Urgente',
+}
+
+const normalizeWorkOrderStatusCode = (status = '') => {
+  const normalizedStatus = normalizeComparableText(status).replace(/\s+/g, ' ')
+  return WORK_ORDER_STATUS_ALIASES[normalizedStatus] || WORK_ORDER_STATUS_ALIASES[normalizedStatus.replace(/\s/g, '_')] || 'pending'
+}
+
+const normalizeWorkOrderPriorityCode = (priority = '') => {
+  const normalizedPriority = normalizeComparableText(priority)
+  if (['baja', 'media', 'alta', 'urgente'].includes(normalizedPriority)) return normalizedPriority
+  return 'media'
+}
+
+const getWorkOrderStatus = (workOrder = {}) =>
+  WORK_ORDER_STATUS_LABELS[normalizeWorkOrderStatusCode(workOrder.status || workOrder.estado || workOrder.statusLabel)] || 'Pendiente'
+
+const getWorkOrderPriority = (workOrder = {}) =>
+  WORK_ORDER_PRIORITY_LABELS[normalizeWorkOrderPriorityCode(workOrder.priority || workOrder.priorityLabel)] || 'Media'
 
 const getWorkOrderArea = (workOrder = {}) =>
   workOrder.targetArea || workOrder.areaResponsable || workOrder.assignedArea || 'Sin área'
 
 const getWorkOrderResponsible = (workOrder = {}) =>
   workOrder.assigneeName || workOrder.assignedTo || workOrder.responsibleName || 'Sin responsable'
+
+const isWorkOrderOverdue = (workOrder = {}) => {
+  const status = normalizeWorkOrderStatusCode(workOrder.status || workOrder.statusLabel)
+  if (!workOrder.dueDate || ['completed', 'cancelled'].includes(status)) return false
+
+  const dueDate = new Date(workOrder.dueDate)
+  if (Number.isNaN(dueDate.getTime())) return false
+  dueDate.setHours(0, 0, 0, 0)
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return dueDate < today
+}
+
+const buildWorkOrderOperationalSummary = (workOrders = []) => {
+  const pendingStatuses = new Set(['draft', 'pending', 'assigned'])
+  const inProgressStatuses = new Set(['in_progress', 'paused'])
+
+  return {
+    pending: workOrders.filter((workOrder) => pendingStatuses.has(normalizeWorkOrderStatusCode(workOrder.status))).length,
+    inProgress: workOrders.filter((workOrder) => inProgressStatuses.has(normalizeWorkOrderStatusCode(workOrder.status))).length,
+    urgent: workOrders.filter((workOrder) => normalizeWorkOrderPriorityCode(workOrder.priority) === 'urgente').length,
+    overdue: workOrders.filter(isWorkOrderOverdue).length,
+    completed: workOrders.filter((workOrder) => normalizeWorkOrderStatusCode(workOrder.status) === 'completed').length,
+  }
+}
 
 const getFinanceStatus = (movement = {}) => movement.status || movement.estado || 'Sin pagar'
 
@@ -291,6 +382,8 @@ const buildStandardStats = async () => {
   const workOrdersByStatus = countBy(workOrders, getWorkOrderStatus, 'Sin estado')
   const workOrdersByArea = countBy(workOrders, getWorkOrderArea, 'Sin área')
   const workOrdersByResponsible = countBy(workOrders, getWorkOrderResponsible, 'Sin responsable')
+  const workOrdersByPriority = countBy(workOrders, getWorkOrderPriority, 'Sin prioridad')
+  const workOrderOperationalSummary = buildWorkOrderOperationalSummary(workOrders)
   const financeByType = countBy(financeMovements, getFinanceType, 'Sin tipo')
   const financeByStatus = countBy(financeMovements, getFinanceStatus, 'Sin estado')
   const clientsByStatus = countBy(clients, (client) => client.status || client.estado, 'Sin estado')
@@ -318,6 +411,11 @@ const buildStandardStats = async () => {
       tenders: tenders.length,
       users: users.length,
       workOrders: workOrders.length,
+      workOrdersCompleted: workOrderOperationalSummary.completed,
+      workOrdersInProgress: workOrderOperationalSummary.inProgress,
+      workOrdersOverdue: workOrderOperationalSummary.overdue,
+      workOrdersPending: workOrderOperationalSummary.pending,
+      workOrdersUrgent: workOrderOperationalSummary.urgent,
     },
     byStatus: [
       ...quotesByStatus.map((item) => ({ ...item, module: 'quotes' })),
@@ -344,8 +442,10 @@ const buildStandardStats = async () => {
       users: { byRole: usersByRole, byStatus: usersByStatus },
       workOrders: {
         byArea: workOrdersByArea,
+        byPriority: workOrdersByPriority,
         byResponsible: workOrdersByResponsible,
         byStatus: workOrdersByStatus,
+        operationalSummary: workOrderOperationalSummary,
       },
     },
     clientsByStatus,
@@ -380,8 +480,10 @@ const buildStandardStats = async () => {
     usersByRole,
     usersByStatus,
     workOrdersByArea,
+    workOrdersByPriority,
     workOrdersByResponsible,
     workOrdersByStatus,
+    workOrderOperationalSummary,
   }
 }
 
@@ -467,7 +569,14 @@ const getWorkOrderStats = async () => {
   const stats = await buildStandardStats()
 
   return {
-    totals: { workOrders: stats.totals.workOrders },
+    totals: {
+      workOrders: stats.totals.workOrders,
+      pending: stats.workOrderOperationalSummary.pending,
+      inProgress: stats.workOrderOperationalSummary.inProgress,
+      urgent: stats.workOrderOperationalSummary.urgent,
+      overdue: stats.workOrderOperationalSummary.overdue,
+      completed: stats.workOrderOperationalSummary.completed,
+    },
     byStatus: stats.workOrdersByStatus,
     byType: stats.workOrdersByArea,
     byUser: stats.workOrdersByResponsible,
@@ -476,8 +585,10 @@ const getWorkOrderStats = async () => {
     financialSummary: stats.financialSummary,
     updatedAt: stats.updatedAt,
     workOrdersByArea: stats.workOrdersByArea,
+    workOrdersByPriority: stats.workOrdersByPriority,
     workOrdersByResponsible: stats.workOrdersByResponsible,
     workOrdersByStatus: stats.workOrdersByStatus,
+    workOrderOperationalSummary: stats.workOrderOperationalSummary,
   }
 }
 

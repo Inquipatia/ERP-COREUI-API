@@ -21,6 +21,10 @@ const PERMISSIONS = [
   'tenders.view',
   'workorders.view',
   'workorders.create',
+  'workorders.update',
+  'workorders.assign',
+  'workorders.complete',
+  'workorders.delete',
   'users.view',
   'users.manage',
   'finance.view',
@@ -89,6 +93,8 @@ const getPermissionsForRole = (role = '', email = '') => {
       'documents.view',
       'tenders.view',
       'workorders.view',
+      'workorders.create',
+      'workorders.update',
       'finance.view',
       'finance.create',
       'finance.update',
@@ -118,6 +124,7 @@ const getPermissionsForRole = (role = '', email = '') => {
       'tenders.view',
       'workorders.view',
       'workorders.create',
+      'workorders.update',
       'products.view',
       'products.manage',
       'materials.view',
@@ -131,6 +138,9 @@ const getPermissionsForRole = (role = '', email = '') => {
       'documents.view',
       'workorders.view',
       'workorders.create',
+      'workorders.update',
+      'workorders.assign',
+      'workorders.complete',
       'products.view',
       'materials.view',
       'materials.manage',
@@ -142,6 +152,7 @@ const getPermissionsForRole = (role = '', email = '') => {
     'dashboard.view',
     'documents.view',
     'workorders.view',
+    'workorders.create',
     'products.view',
     'materials.view',
     'ai.chat',
@@ -276,6 +287,57 @@ const toIso = (value) => {
 const toNumber = (value) => Number(value || 0)
 
 const emptyToNull = (value) => (value === '' || value === undefined ? null : value)
+
+const WORK_ORDER_STATUS_LABELS = {
+  draft: 'Borrador',
+  pending: 'Pendiente',
+  assigned: 'Recibida',
+  in_progress: 'En proceso',
+  paused: 'Pausada',
+  completed: 'Finalizada',
+  cancelled: 'Rechazada',
+}
+
+const WORK_ORDER_STATUS_ALIASES = {
+  borrador: 'draft',
+  draft: 'draft',
+  pendiente: 'pending',
+  pending: 'pending',
+  recibida: 'assigned',
+  assigned: 'assigned',
+  asignada: 'assigned',
+  'en proceso': 'in_progress',
+  en_proceso: 'in_progress',
+  in_progress: 'in_progress',
+  pausada: 'paused',
+  paused: 'paused',
+  finalizada: 'completed',
+  aprobada: 'completed',
+  completed: 'completed',
+  completada: 'completed',
+  rechazada: 'cancelled',
+  cancelada: 'cancelled',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+}
+
+const WORK_ORDER_PRIORITY_LABELS = {
+  baja: 'Baja',
+  media: 'Media',
+  alta: 'Alta',
+  urgente: 'Urgente',
+}
+
+const normalizeWorkOrderStatus = (status = '') => {
+  const normalizedStatus = normalizeText(status).replace(/\s+/g, ' ')
+  return WORK_ORDER_STATUS_ALIASES[normalizedStatus] || WORK_ORDER_STATUS_ALIASES[normalizedStatus.replace(/\s/g, '_')] || 'pending'
+}
+
+const normalizeWorkOrderPriority = (priority = '') => {
+  const normalizedPriority = normalizeText(priority)
+  if (['baja', 'media', 'alta', 'urgente'].includes(normalizedPriority)) return normalizedPriority
+  return 'media'
+}
 
 const sanitizeUser = (user = {}) => {
   const { password, passwordHash, ...safeUser } = user
@@ -414,18 +476,56 @@ const serializeTender = (record = {}) => ({
   updatedAt: toIso(record.updatedAt),
 })
 
-const serializeWorkOrder = (record = {}) => ({
-  ...record,
-  dueDate: toDateOnly(record.dueDate),
-  comments: Array.isArray(record.comments) ? record.comments : [],
-  movements: Array.isArray(record.workOrderMovements) && record.workOrderMovements.length
+const serializeWorkOrder = (record = {}) => {
+  const payload = record.payload && typeof record.payload === 'object' ? record.payload : {}
+  const status = normalizeWorkOrderStatus(payload.status || record.status)
+  const priority = normalizeWorkOrderPriority(payload.priority || record.priority)
+  const comments = Array.isArray(record.comments)
+    ? record.comments
+    : Array.isArray(payload.comments)
+      ? payload.comments
+      : []
+  const movements = Array.isArray(record.workOrderMovements) && record.workOrderMovements.length
     ? record.workOrderMovements.map(serializeWorkOrderMovement)
     : Array.isArray(record.movements)
       ? record.movements
-      : [],
-  createdAt: toIso(record.createdAt),
-  updatedAt: toIso(record.updatedAt),
-})
+      : Array.isArray(payload.workflowLog)
+        ? payload.workflowLog
+        : []
+
+  return {
+    ...record,
+    workOrderNumber: payload.workOrderNumber || payload.number || record.id,
+    clientId: payload.clientId || '',
+    clientName: payload.clientName || record.client || '',
+    quoteId: payload.quoteId || '',
+    documentId: payload.documentId || '',
+    tenderId: payload.tenderId || '',
+    assignedArea: payload.assignedArea || record.targetArea || '',
+    assignedToId: payload.assignedToId || '',
+    assignedToName: payload.assignedToName || record.assigneeName || '',
+    priority,
+    priorityLabel: WORK_ORDER_PRIORITY_LABELS[priority],
+    status,
+    statusLabel: WORK_ORDER_STATUS_LABELS[status],
+    dueDate: toDateOnly(record.dueDate),
+    startDate: payload.startDate || '',
+    completedAt: payload.completedAt || '',
+    createdById: payload.createdById || '',
+    createdByName: payload.createdByName || record.requesterName || '',
+    items: Array.isArray(payload.items) ? payload.items : [],
+    tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+    details: payload.details || record.requirements || '',
+    attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+    notes: payload.notes || record.observations || '',
+    comments,
+    movements,
+    workflowLog: movements,
+    payload,
+    createdAt: toIso(record.createdAt),
+    updatedAt: toIso(record.updatedAt),
+  }
+}
 
 const serializeWorkOrderMovement = (record = {}) => ({
   id: record.id,
@@ -730,31 +830,63 @@ const normalizeForPrisma = (key, payload = {}) => {
   }
 
   if (key === 'workOrders') {
+    const status = normalizeWorkOrderStatus(payload.status || payload.statusLabel)
+    const priority = normalizeWorkOrderPriority(payload.priority || payload.priorityLabel)
+    const targetArea = payload.assignedArea || payload.targetArea || payload.areaResponsable || ''
+    const assigneeName = payload.assignedToName || payload.assigneeName || payload.assignedTo || ''
+    const requesterName = payload.createdByName || payload.requesterName || payload.requestedBy || ''
+    const workOrderNumber = payload.workOrderNumber || payload.number || payload.id || createId('ot')
+    const payloadMetadata = {
+      ...payload,
+      workOrderNumber,
+      clientId: payload.clientId || '',
+      clientName: payload.clientName || payload.client || payload.cliente || '',
+      quoteId: payload.quoteId || payload.sourceQuoteId || '',
+      documentId: payload.documentId || payload.sourceDocumentId || '',
+      tenderId: payload.tenderId || '',
+      assignedArea: targetArea,
+      assignedToId: payload.assignedToId || '',
+      assignedToName: assigneeName,
+      priority,
+      priorityLabel: WORK_ORDER_PRIORITY_LABELS[priority],
+      status,
+      statusLabel: WORK_ORDER_STATUS_LABELS[status],
+      startDate: payload.startDate || '',
+      completedAt: status === 'completed' ? payload.completedAt || new Date().toISOString() : payload.completedAt || '',
+      createdById: payload.createdById || payload.requesterId || '',
+      createdByName: requesterName,
+      items: Array.isArray(payload.items) ? payload.items : [],
+      tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
+      details: payload.details || payload.requirements || '',
+      attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+      notes: payload.notes || payload.observations || '',
+    }
+
     return cleanPayload({
       id: payload.id || createId('wo'),
       title: payload.title || 'Orden de trabajo',
       type: payload.type || 'Administrativo',
-      client: payload.client || '',
+      client: payload.clientName || payload.client || payload.cliente || '',
       company: payload.company || '',
       quoteNumber: payload.quoteNumber || '',
-      requesterName: payload.requesterName || payload.requestedBy || '',
+      requesterName,
       requesterEmail: payload.requesterEmail || '',
       requesterRole: payload.requesterRole || '',
-      assigneeName: payload.assigneeName || payload.assignedTo || '',
+      assigneeName,
       assigneeEmail: payload.assigneeEmail || '',
       assigneeRole: payload.assigneeRole || '',
       sourceArea: payload.sourceArea || '',
-      targetArea: payload.targetArea || '',
-      priority: payload.priority || 'Media',
-      status: payload.status || 'Pendiente',
+      targetArea,
+      priority,
+      status,
       dueDate: toDate(payload.dueDate),
       description: payload.description || '',
-      requirements: payload.requirements || '',
+      requirements: payload.details || payload.requirements || '',
       deliverables: payload.deliverables || '',
-      observations: payload.observations || '',
+      observations: payload.notes || payload.observations || '',
       comments: Array.isArray(payload.comments) ? payload.comments : [],
       movements: Array.isArray(payload.movements) ? payload.movements : [],
-      payload,
+      payload: payloadMetadata,
       createdAt: toDate(payload.createdAt) || now,
       updatedAt: toDate(payload.updatedAt) || now,
     })

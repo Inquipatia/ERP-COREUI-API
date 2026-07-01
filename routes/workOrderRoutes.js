@@ -1,69 +1,119 @@
 const express = require('express')
-const dataAdapter = require('../services/dataAdapter')
-const statisticsService = require('../services/statisticsService')
-const { requireAuth, requirePermission } = require('../middleware/authMiddleware')
+const workOrderService = require('../services/workOrderService')
+const { requireAuth, userHasPermission } = require('../middleware/authMiddleware')
 
 const router = express.Router()
 
-router.get('/', requireAuth, requirePermission('workorders.view'), async (_request, response, next) => {
+const requireAnyPermission = (permissions = []) => (request, response, next) => {
+  if (permissions.some((permission) => userHasPermission(request.currentUser, permission))) {
+    next()
+    return
+  }
+
+  response.status(403).json({
+    error: 'No tienes permiso para consultar esta informacion.',
+    permissions,
+  })
+}
+
+const canViewWorkOrders = requireAnyPermission(['workorders.view'])
+const canCreateWorkOrders = requireAnyPermission(['workorders.create'])
+const canUpdateWorkOrders = requireAnyPermission([
+  'workorders.update',
+  'workorders.create',
+  'workorders.assign',
+  'workorders.complete',
+])
+const canDeleteWorkOrders = requireAnyPermission(['workorders.delete', 'workorders.assign'])
+
+router.get('/', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
-    response.json({ items: await dataAdapter.list('workOrders') })
+    response.json(await workOrderService.listWorkOrders(request.currentUser))
   } catch (error) {
     next(error)
   }
 })
 
-router.get('/stats', requireAuth, requirePermission('workorders.view'), async (_request, response, next) => {
+router.get('/stats', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
-    response.json(await statisticsService.getWorkOrderStats())
+    response.json(await workOrderService.getWorkOrderStats(request.currentUser))
   } catch (error) {
     next(error)
   }
 })
 
-router.post('/', requireAuth, requirePermission('workorders.create'), async (request, response, next) => {
+router.get('/activity', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
-    response.status(201).json(await dataAdapter.create('workOrders', 'wo', request.body || {}))
+    response.json(await workOrderService.getWorkOrderActivity(request.currentUser))
   } catch (error) {
     next(error)
   }
 })
 
-router.get('/:id', requireAuth, requirePermission('workorders.view'), async (request, response, next) => {
+router.post('/from-quote/:quoteId', requireAuth, canCreateWorkOrders, async (request, response, next) => {
   try {
-    response.json(await dataAdapter.findById('workOrders', request.params.id))
+    response.status(201).json(
+      await workOrderService.createFromQuote(request.params.quoteId, request.body || {}, request.currentUser),
+    )
   } catch (error) {
     next(error)
   }
 })
 
-router.put('/:id', requireAuth, requirePermission('workorders.create'), async (request, response, next) => {
+router.post('/from-document/:documentId', requireAuth, canCreateWorkOrders, async (request, response, next) => {
   try {
-    response.json(await dataAdapter.update('workOrders', request.params.id, request.body || {}))
+    response.status(201).json(
+      await workOrderService.createFromDocument(request.params.documentId, request.body || {}, request.currentUser),
+    )
   } catch (error) {
     next(error)
   }
 })
 
-router.patch('/:id', requireAuth, requirePermission('workorders.create'), async (request, response, next) => {
+router.post('/', requireAuth, canCreateWorkOrders, async (request, response, next) => {
   try {
-    response.json(await dataAdapter.update('workOrders', request.params.id, request.body || {}))
+    response.status(201).json(await workOrderService.createWorkOrder(request.body || {}, request.currentUser))
   } catch (error) {
     next(error)
   }
 })
 
-router.delete('/:id', requireAuth, requirePermission('workorders.create'), async (request, response, next) => {
+router.get('/:id', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
-    response.json(await dataAdapter.remove('workOrders', request.params.id))
+    response.json(await workOrderService.getWorkOrderById(request.params.id, request.currentUser))
   } catch (error) {
     next(error)
   }
 })
 
-router.post('/:id/movement', requireAuth, requirePermission('workorders.create'), async (request, response, next) => {
+router.put('/:id', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
   try {
-    const workOrder = await dataAdapter.findById('workOrders', request.params.id)
+    response.json(await workOrderService.updateWorkOrder(request.params.id, request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.patch('/:id', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.updateWorkOrder(request.params.id, request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.delete('/:id', requireAuth, canDeleteWorkOrders, async (request, response, next) => {
+  try {
+    await workOrderService.getWorkOrderById(request.params.id, request.currentUser)
+    response.json(await workOrderService.deleteWorkOrder(request.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/movement', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    const workOrder = await workOrderService.getWorkOrderById(request.params.id, request.currentUser)
     const movement = {
       id: `movement-${Date.now()}`,
       ...request.body,
@@ -71,27 +121,43 @@ router.post('/:id/movement', requireAuth, requirePermission('workorders.create')
       userEmail: request.currentUser.email,
       createdAt: new Date().toISOString(),
     }
-    response.json(await dataAdapter.update('workOrders', request.params.id, {
-      movements: [movement, ...(workOrder.movements || [])],
-    }))
+
+    response.json(
+      await workOrderService.updateWorkOrder(
+        request.params.id,
+        {
+          movements: [movement, ...(workOrder.movements || [])],
+          workflowLog: [movement, ...(workOrder.workflowLog || [])],
+        },
+        request.currentUser,
+      ),
+    )
   } catch (error) {
     next(error)
   }
 })
 
-router.post('/:id/comment', requireAuth, requirePermission('workorders.view'), async (request, response, next) => {
+router.post('/:id/comment', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
-    const workOrder = await dataAdapter.findById('workOrders', request.params.id)
+    const workOrder = await workOrderService.getWorkOrderById(request.params.id, request.currentUser)
     const comment = {
       id: `comment-${Date.now()}`,
-      body: request.body?.body || request.body?.comment || '',
+      body: request.body?.body || request.body?.comment || request.body?.message || '',
+      message: request.body?.message || request.body?.body || request.body?.comment || '',
       userName: request.currentUser.name,
       userEmail: request.currentUser.email,
       createdAt: new Date().toISOString(),
     }
-    response.json(await dataAdapter.update('workOrders', request.params.id, {
-      comments: [comment, ...(workOrder.comments || [])],
-    }))
+
+    response.json(
+      await workOrderService.updateWorkOrder(
+        request.params.id,
+        {
+          comments: [comment, ...(workOrder.comments || [])],
+        },
+        request.currentUser,
+      ),
+    )
   } catch (error) {
     next(error)
   }

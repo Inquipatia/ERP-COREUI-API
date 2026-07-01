@@ -21,6 +21,7 @@
     "verify:prod-prisma": "node scripts/verifyProductionPrisma.js",
     "verify:document-exports": "node scripts/verifyDocumentExports.js",
     "verify:sandbox-payment": "node scripts/verifySandboxPayment.js",
+    "verify:workorders-prisma": "node scripts/verifyWorkOrdersPrisma.js",
     "finance:grant-demo-permissions": "node scripts/grantFinanceDemoPermissions.js"
   },
   "dependencies": {
