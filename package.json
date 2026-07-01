@@ -19,7 +19,9 @@
     "db:migrate-json": "node services/migrateJsonToMysql.js",
     "db:health": "node services/checkDatabaseHealth.js",
     "verify:prod-prisma": "node scripts/verifyProductionPrisma.js",
-    "verify:document-exports": "node scripts/verifyDocumentExports.js"
+    "verify:document-exports": "node scripts/verifyDocumentExports.js",
+    "verify:sandbox-payment": "node scripts/verifySandboxPayment.js",
+    "finance:grant-demo-permissions": "node scripts/grantFinanceDemoPermissions.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

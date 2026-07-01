@@ -25,8 +25,13 @@ const PERMISSIONS = [
   'users.view',
   'users.manage',
   'finance.view',
+  'finance.create',
+  'finance.update',
   'finance.manage',
   'finance.payments',
+  'payments.view',
+  'payments.create',
+  'payments.approve',
   'suppliers.view',
   'suppliers.manage',
   'products.view',
@@ -44,6 +49,25 @@ const OWNER_EMAILS = [
 
 const uniq = (values) => [...new Set((values || []).filter(Boolean))]
 
+const FINANCE_DEMO_EMAILS = [
+  'rsepulveda@rubikcreaciones.cl',
+  'r.rojas@rubikcreaciones.cl',
+  'c.guzman@rubikcreaciones.cl',
+  'brojas.romero@rubikcreaciones.cl',
+  'contacto@rubikcreaciones.cl',
+]
+
+const FINANCE_DEMO_PERMISSIONS = [
+  'finance.view',
+  'finance.create',
+  'finance.update',
+  'finance.manage',
+  'finance.payments',
+  'payments.view',
+  'payments.create',
+  'payments.approve',
+]
+
 const normalizeText = (value = '') =>
   String(value)
     .normalize('NFD')
@@ -55,9 +79,13 @@ const getPermissionsForRole = (role = '', email = '') => {
   if (OWNER_EMAILS.includes(String(email).toLowerCase())) return PERMISSIONS
 
   const normalizedRole = normalizeText(role)
+  const withFinanceDemoPermissions = (permissions) =>
+    FINANCE_DEMO_EMAILS.includes(String(email).toLowerCase())
+      ? uniq([...permissions, ...FINANCE_DEMO_PERMISSIONS])
+      : permissions
 
   if (normalizedRole.includes('finanzas')) {
-    return [
+    return withFinanceDemoPermissions([
       'dashboard.view',
       'clients.view',
       'quotes.view',
@@ -65,8 +93,13 @@ const getPermissionsForRole = (role = '', email = '') => {
       'tenders.view',
       'workorders.view',
       'finance.view',
+      'finance.create',
+      'finance.update',
       'finance.manage',
       'finance.payments',
+      'payments.view',
+      'payments.create',
+      'payments.approve',
       'suppliers.view',
       'suppliers.manage',
       'products.view',
@@ -74,11 +107,11 @@ const getPermissionsForRole = (role = '', email = '') => {
       'materials.view',
       'materials.manage',
       'ai.chat',
-    ]
+    ])
   }
 
   if (normalizedRole.includes('venta') || normalizedRole.includes('licitaciones')) {
-    return [
+    return withFinanceDemoPermissions([
       'dashboard.view',
       'clients.view',
       'clients.manage',
@@ -94,11 +127,11 @@ const getPermissionsForRole = (role = '', email = '') => {
       'products.manage',
       'materials.view',
       'ai.chat',
-    ]
+    ])
   }
 
   if (normalizedRole.includes('taller') || normalizedRole.includes('produccion')) {
-    return [
+    return withFinanceDemoPermissions([
       'dashboard.view',
       'documents.view',
       'workorders.view',
@@ -107,10 +140,10 @@ const getPermissionsForRole = (role = '', email = '') => {
       'materials.view',
       'materials.manage',
       'ai.chat',
-    ]
+    ])
   }
 
-  return ['dashboard.view', 'documents.view', 'workorders.view', 'ai.chat']
+  return withFinanceDemoPermissions(['dashboard.view', 'documents.view', 'workorders.view', 'ai.chat'])
 }
 
 const sanitizeUser = (user) => {
@@ -131,6 +164,8 @@ const COLLECTION_KEYS = [
   'workOrders',
   'suppliers',
   'financeMovements',
+  'payments',
+  'auditLogs',
   'products',
   'materials',
   'expenses',
@@ -418,6 +453,8 @@ const createInitialDatabase = () => {
     workOrders: createSeedWorkOrders(),
     suppliers: createSeedSuppliers(),
     financeMovements: createSeedFinanceMovements(),
+    payments: [],
+    auditLogs: [],
     products: createSeedProducts(),
     materials: createSeedMaterials(),
     expenses: [],
@@ -912,6 +949,8 @@ const getCounts = () => ({
   tenders: list('tenders').length,
   workOrders: list('workOrders').length,
   financeMovements: list('financeMovements').length,
+  payments: list('payments').length,
+  auditLogs: list('auditLogs').length,
   suppliers: list('suppliers').length,
   products: list('products').length,
   materials: list('materials').length,

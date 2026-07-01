@@ -19,8 +19,13 @@ const ALL_PERMISSIONS = [
   'users.view',
   'users.manage',
   'finance.view',
+  'finance.create',
+  'finance.update',
   'finance.manage',
   'finance.payments',
+  'payments.view',
+  'payments.create',
+  'payments.approve',
   'suppliers.view',
   'suppliers.manage',
   'products.view',
@@ -40,8 +45,13 @@ const ROLE_PERMISSIONS = {
     'tenders.view',
     'workorders.view',
     'finance.view',
+    'finance.create',
+    'finance.update',
     'finance.manage',
     'finance.payments',
+    'payments.view',
+    'payments.create',
+    'payments.approve',
     'suppliers.view',
     'suppliers.manage',
     'products.view',
@@ -78,6 +88,34 @@ const ROLE_PERMISSIONS = {
     'ai.chat',
   ],
   design: ['dashboard.view', 'documents.view', 'workorders.view', 'workorders.create', 'products.view', 'materials.view', 'ai.chat'],
+}
+
+const FINANCE_DEMO_EMAILS = [
+  'rsepulveda@rubikcreaciones.cl',
+  'r.rojas@rubikcreaciones.cl',
+  'c.guzman@rubikcreaciones.cl',
+  'brojas.romero@rubikcreaciones.cl',
+  'contacto@rubikcreaciones.cl',
+]
+
+const FINANCE_DEMO_PERMISSIONS = [
+  'finance.view',
+  'finance.create',
+  'finance.update',
+  'finance.manage',
+  'finance.payments',
+  'payments.view',
+  'payments.create',
+  'payments.approve',
+]
+
+const uniq = (values) => [...new Set((values || []).filter(Boolean))]
+
+const getSeedPermissions = (user) => {
+  const permissions = ROLE_PERMISSIONS[user.permissionProfile] || ROLE_PERMISSIONS.design
+  return FINANCE_DEMO_EMAILS.includes(String(user.email || '').toLowerCase())
+    ? uniq([...permissions, ...FINANCE_DEMO_PERMISSIONS])
+    : permissions
 }
 
 const USERS = [
@@ -164,7 +202,7 @@ const seedProductionUsers = async () => {
   for (const user of USERS) {
     const email = user.email.toLowerCase()
     const existingUser = await prisma.user.findUnique({ where: { email } })
-    const permissions = ROLE_PERMISSIONS[user.permissionProfile] || ROLE_PERMISSIONS.design
+    const permissions = getSeedPermissions(user)
 
     if (existingUser) {
       await prisma.user.update({
