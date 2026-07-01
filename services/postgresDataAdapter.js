@@ -350,6 +350,82 @@ const cleanPayload = (payload = {}) =>
     return result
   }, {})
 
+const safeJsonValue = (value, seen = new WeakSet()) => {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined
+  if (value === null) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
+  if (typeof value === 'bigint') return value.toString()
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' || typeof value === 'boolean') return value
+
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return '[Circular]'
+    seen.add(value)
+    return value.map((item) => {
+      const sanitizedItem = safeJsonValue(item, seen)
+      return sanitizedItem === undefined ? null : sanitizedItem
+    })
+  }
+
+  if (typeof value === 'object') {
+    if (seen.has(value)) return '[Circular]'
+    seen.add(value)
+
+    return Object.entries(value).reduce((result, [key, item]) => {
+      const sanitizedItem = safeJsonValue(item, seen)
+      if (sanitizedItem !== undefined) result[key] = sanitizedItem
+      return result
+    }, {})
+  }
+
+  return String(value)
+}
+
+const stringifySafeJson = (value) => {
+  try {
+    return JSON.stringify(value)
+  } catch (_error) {
+    return ''
+  }
+}
+
+const safeJsonPayload = (value, { id = '', field = 'payload', context = 'record' } = {}) => {
+  let source = value
+  let parsedString = false
+  let wrapped = false
+
+  if (source === undefined || source === null) {
+    source = {}
+  } else if (typeof source === 'string') {
+    try {
+      source = JSON.parse(source)
+      parsedString = true
+    } catch (_error) {
+      source = { value: source }
+      wrapped = true
+    }
+  }
+
+  const sanitized = safeJsonValue(source)
+  const objectPayload =
+    sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+      ? sanitized
+      : { value: sanitized ?? null }
+
+  const wasSanitized = parsedString || wrapped || stringifySafeJson(sanitized) !== stringifySafeJson(source)
+  if (wasSanitized) {
+    console.warn('[postgresDataAdapter] JSON payload sanitizado', {
+      context,
+      field,
+      id,
+      parsedString,
+      wrapped,
+    })
+  }
+
+  return objectPayload
+}
+
 const getModel = (key) => {
   const modelName = modelByKey[key]
   if (!modelName) throw new Error(`Modelo no soportado por Prisma: ${key}`)
@@ -836,6 +912,7 @@ const normalizeForPrisma = (key, payload = {}) => {
     const assigneeName = payload.assignedToName || payload.assigneeName || payload.assignedTo || ''
     const requesterName = payload.createdByName || payload.requesterName || payload.requestedBy || ''
     const workOrderNumber = payload.workOrderNumber || payload.number || payload.id || createId('ot')
+    const workOrderId = payload.id || createId('wo')
     const payloadMetadata = {
       ...payload,
       workOrderNumber,
@@ -861,9 +938,14 @@ const normalizeForPrisma = (key, payload = {}) => {
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       notes: payload.notes || payload.observations || '',
     }
+    const sanitizedPayload = safeJsonPayload(payloadMetadata, {
+      context: 'workOrders',
+      field: 'payload',
+      id: workOrderId,
+    })
 
     return cleanPayload({
-      id: payload.id || createId('wo'),
+      id: workOrderId,
       title: payload.title || 'Orden de trabajo',
       type: payload.type || 'Administrativo',
       client: payload.clientName || payload.client || payload.cliente || '',
@@ -884,9 +966,9 @@ const normalizeForPrisma = (key, payload = {}) => {
       requirements: payload.details || payload.requirements || '',
       deliverables: payload.deliverables || '',
       observations: payload.notes || payload.observations || '',
-      comments: Array.isArray(payload.comments) ? payload.comments : [],
-      movements: Array.isArray(payload.movements) ? payload.movements : [],
-      payload: payloadMetadata,
+      comments: safeJsonValue(Array.isArray(payload.comments) ? payload.comments : []),
+      movements: safeJsonValue(Array.isArray(payload.movements) ? payload.movements : []),
+      payload: sanitizedPayload,
       createdAt: toDate(payload.createdAt) || now,
       updatedAt: toDate(payload.updatedAt) || now,
     })
@@ -1188,7 +1270,20 @@ const fetchCreatedOrUpdatedRecord = async (key, id) => findById(key, id)
 const create = async (key, prefix, payload) => {
   const model = getModel(key)
   const data = normalizeForPrisma(key, { id: payload.id || createId(prefix), ...payload })
-  const record = await model.create({ data })
+  let record
+  try {
+    record = await model.create({ data })
+  } catch (error) {
+    if (key === 'workOrders') {
+      console.error('[postgresDataAdapter] Error creando WorkOrder', {
+        id: data.id,
+        prismaCode: error.code,
+        mysqlCode: error.meta?.code,
+        message: error.message,
+      })
+    }
+    throw error
+  }
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
     await syncQuoteDocument(record)
@@ -1202,7 +1297,20 @@ const update = async (key, id, payload) => {
   const model = getModel(key)
   const data = normalizeForPrisma(key, { ...payload, id })
   delete data.createdAt
-  const record = await model.update({ where: { id }, data })
+  let record
+  try {
+    record = await model.update({ where: { id }, data })
+  } catch (error) {
+    if (key === 'workOrders') {
+      console.error('[postgresDataAdapter] Error actualizando WorkOrder', {
+        id,
+        prismaCode: error.code,
+        mysqlCode: error.meta?.code,
+        message: error.message,
+      })
+    }
+    throw error
+  }
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
     await syncQuoteDocument(record)

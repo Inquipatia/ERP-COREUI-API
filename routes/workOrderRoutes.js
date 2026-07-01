@@ -163,4 +163,26 @@ router.post('/:id/comment', requireAuth, canViewWorkOrders, async (request, resp
   }
 })
 
+router.use((error, request, response, next) => {
+  const statusCode = error.statusCode || error.status || 500
+
+  console.error('[workOrderRoutes] Error procesando orden de trabajo', {
+    id: request.params?.id || request.params?.quoteId || request.params?.documentId || null,
+    method: request.method,
+    path: request.originalUrl,
+    prismaCode: error.code,
+    mysqlCode: error.meta?.code,
+    message: error.message,
+  })
+
+  if (statusCode >= 500) {
+    response.status(500).json({
+      error: 'No se pudo procesar la orden de trabajo. Revisa los logs del API.',
+    })
+    return
+  }
+
+  next(error)
+})
+
 module.exports = router
