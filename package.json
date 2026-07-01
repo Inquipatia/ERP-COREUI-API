@@ -17,7 +17,8 @@
     "db:seed": "node prisma/seed.js",
     "db:seed-users": "node services/seedProductionUsers.js",
     "db:migrate-json": "node services/migrateJsonToMysql.js",
-    "db:health": "node services/checkDatabaseHealth.js"
+    "db:health": "node services/checkDatabaseHealth.js",
+    "verify:prod-prisma": "node scripts/verifyProductionPrisma.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

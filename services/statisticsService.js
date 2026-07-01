@@ -431,6 +431,7 @@ const getDocumentStats = async () => {
   const stats = await buildStandardStats()
 
   return {
+    total: stats.totals.documents,
     totals: { documents: stats.totals.documents },
     byStatus: stats.documentsByStatus,
     byType: stats.documentsByType,
