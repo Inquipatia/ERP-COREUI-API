@@ -1,5 +1,5 @@
 const DEFAULT_API_URL = 'https://api.rubikcreaciones.com/api'
-const DEFAULT_TEST_EMAIL = 'rsepulveda@rubikcreaciones.cl'
+const DEFAULT_TEST_EMAIL = 'r.rojas@rubikcreaciones.cl'
 const DEFAULT_TEST_PASSWORD = '123456'
 
 const apiUrl = String(process.env.PRODUCTION_API_URL || DEFAULT_API_URL).replace(/\/+$/, '')

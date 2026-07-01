@@ -50,7 +50,6 @@ const OWNER_EMAILS = [
 const uniq = (values) => [...new Set((values || []).filter(Boolean))]
 
 const FINANCE_DEMO_EMAILS = [
-  'rsepulveda@rubikcreaciones.cl',
   'r.rojas@rubikcreaciones.cl',
   'c.guzman@rubikcreaciones.cl',
   'brojas.romero@rubikcreaciones.cl',

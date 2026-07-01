@@ -57,6 +57,7 @@ const app = express()
 app.use(cors(corsOptions))
 app.options(/.*/, cors(corsOptions))
 app.use(express.json({ limit: '25mb' }))
+app.use(express.urlencoded({ extended: false }))
 app.use(attachUser)
 
 app.get('/', (_request, response) => {

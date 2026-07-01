@@ -3,12 +3,13 @@ require('dotenv').config({ quiet: true })
 const { getPrisma, disconnectPrisma } = require('../services/prismaClient')
 
 const DEMO_EMAILS = [
-  'rsepulveda@rubikcreaciones.cl',
   'r.rojas@rubikcreaciones.cl',
   'c.guzman@rubikcreaciones.cl',
   'brojas.romero@rubikcreaciones.cl',
   'contacto@rubikcreaciones.cl',
 ]
+
+const SALES_EMAILS_WITHOUT_FINANCE = ['rsepulveda@rubikcreaciones.cl']
 
 const DEMO_PERMISSIONS = [
   'finance.view',
@@ -30,6 +31,7 @@ const main = async () => {
     ok: true,
     adapter: adapterMode || 'prisma',
     updated: 0,
+    revoked: 0,
     missing: [],
     users: [],
   }
@@ -64,6 +66,44 @@ const main = async () => {
       before,
       after,
       added,
+    })
+  }
+
+  for (const email of SALES_EMAILS_WITHOUT_FINANCE) {
+    const user = await prisma.user.findUnique({ where: { email } })
+    if (!user) {
+      summary.missing.push(email)
+      continue
+    }
+
+    const roleText = `${user.role || ''} ${user.position || ''} ${user.area || ''}`.toLowerCase()
+    const isSalesUser = roleText.includes('venta') || roleText.includes('sales')
+    const before = Array.isArray(user.permissions) ? user.permissions : []
+    const after = isSalesUser
+      ? before.filter((permission) => !DEMO_PERMISSIONS.includes(permission))
+      : before
+    const removed = before.filter((permission) => !after.includes(permission))
+
+    if (removed.length > 0) {
+      await prisma.user.update({
+        where: { email },
+        data: {
+          permissions: after,
+          payload: {
+            ...(user.payload && typeof user.payload === 'object' ? user.payload : {}),
+            financeDemoPermissionsRevokedAt: new Date().toISOString(),
+          },
+        },
+      })
+      summary.revoked += 1
+    }
+
+    summary.users.push({
+      email,
+      before,
+      after,
+      removed,
+      skipped: isSalesUser ? undefined : 'Usuario no parece ser ventas; no se revocaron permisos.',
     })
   }
 

@@ -23,6 +23,32 @@ const canViewPayments = requireAnyPermission(['payments.view', 'finance.view'])
 const canCreatePayments = requireAnyPermission(['payments.create', 'finance.payments', 'finance.manage'])
 const canApprovePayments = requireAnyPermission(['payments.approve', 'finance.payments', 'finance.manage'])
 
+const getTransbankReturnToken = (request) => {
+  const tokenWs = request.body?.token_ws || request.query?.token_ws
+  if (tokenWs) return { token: tokenWs, tokenType: 'token_ws' }
+
+  const abortedToken = request.body?.TBK_TOKEN || request.query?.TBK_TOKEN
+  if (abortedToken) return { token: abortedToken, tokenType: 'TBK_TOKEN' }
+
+  return { token: '', tokenType: '' }
+}
+
+const handleTransbankReturn = async (request, response, next) => {
+  try {
+    const { token, tokenType } = getTransbankReturnToken(request)
+    const result = await paymentService.confirmTransbankPayment({ token, tokenType }, request.currentUser || {})
+
+    if (request.query?.format === 'json' || request.body?.format === 'json') {
+      response.json(result)
+      return
+    }
+
+    response.redirect(303, result.frontendUrl)
+  } catch (error) {
+    next(error)
+  }
+}
+
 router.get('/summary', requireAuth, requirePermission('finance.view'), async (_request, response, next) => {
   try {
     response.json(await paymentService.getFinanceSummary())
@@ -115,6 +141,10 @@ router.get('/payments', requireAuth, canViewPayments, async (request, response, 
   }
 })
 
+router.get('/payments/transbank/return', handleTransbankReturn)
+
+router.post('/payments/transbank/return', handleTransbankReturn)
+
 router.get('/payments/:id', requireAuth, canViewPayments, async (request, response, next) => {
   try {
     response.json(await paymentService.getPaymentById(request.params.id))
@@ -127,6 +157,14 @@ router.post('/payments', requireAuth, canCreatePayments, async (request, respons
   try {
     const result = await paymentService.createPayment(request.body || {}, request.currentUser)
     response.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/payments/:id/transbank/create', requireAuth, canCreatePayments, async (request, response, next) => {
+  try {
+    response.json(await paymentService.createTransbankPaymentTransaction(request.params.id, request.currentUser))
   } catch (error) {
     next(error)
   }
@@ -187,6 +225,14 @@ router.get('/payments/:id/audit', requireAuth, canViewPayments, async (request, 
 router.post('/demo/sandbox-payment', requireAuth, canCreatePayments, async (request, response, next) => {
   try {
     response.json(await paymentService.createSandboxPaymentDemo(request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/demo/transbank-payment', requireAuth, canCreatePayments, async (request, response, next) => {
+  try {
+    response.json(await paymentService.createTransbankPaymentDemo(request.currentUser))
   } catch (error) {
     next(error)
   }

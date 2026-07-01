@@ -50,11 +50,25 @@ const getConfiguredProviderName = () =>
     .trim()
     .toLowerCase()
 
+const getPublicApiUrl = () =>
+  String(process.env.PUBLIC_API_URL || 'https://api.rubikcreaciones.com/api').replace(/\/+$/, '')
+
+const getPublicErpUrl = () =>
+  String(process.env.PUBLIC_ERP_URL || 'https://erp.rubikcreaciones.com').replace(/\/+$/, '')
+
+const buildTransbankReturnUrl = () => `${getPublicApiUrl()}/finance/payments/transbank/return`
+
+const buildFrontendPaymentUrl = (paymentStatus, paymentId) =>
+  `${getPublicErpUrl()}/#/erp/finanzas?paymentStatus=${encodeURIComponent(paymentStatus || '')}&paymentId=${encodeURIComponent(paymentId || '')}`
+
 const assertPaymentsEnabled = () => {
   const mode = getPaymentsMode()
 
   if (mode === 'production') {
-    throw createError('Pagos reales de proveedor aún no implementados', 501)
+    const realPaymentsEnabled = String(process.env.ENABLE_REAL_PAYMENTS || '').toLowerCase() === 'true'
+    if (!realPaymentsEnabled) {
+      throw createError('Pagos reales de proveedor aun no implementados', 501)
+    }
   }
 
   if (mode === 'disabled') {
@@ -273,18 +287,29 @@ const recalculateMovementPaymentStatus = async (movementId) => {
   const paymentRecords = isPrismaMode()
     ? await getPrisma().payment.findMany({ where: { financialMovementId: movementId } })
     : dataAdapter.list('payments').filter((payment) => payment.financialMovementId === movementId)
+  const serializedPayments = paymentRecords.map(serializePayment)
 
-  const paidAmount = paymentRecords
-    .map(serializePayment)
+  const paidAmount = serializedPayments
     .filter((payment) => SETTLED_PAYMENT_STATUSES.has(payment.status))
     .reduce((total, payment) => total + payment.amount, 0)
 
   const movementRecord = await findMovementRecord(movementId)
   const currentMovement = serializeMovement(movementRecord)
-  const latestSettledPayment = paymentRecords
-    .map(serializePayment)
+  const latestSettledPayment = serializedPayments
     .filter((payment) => SETTLED_PAYMENT_STATUSES.has(payment.status))
     .sort((first, second) => String(second.transactionDate || '').localeCompare(String(first.transactionDate || '')))[0]
+  const hasPendingPayment = serializedPayments.some((payment) => payment.status === 'pending')
+  const hasFailedPayment = serializedPayments.some((payment) => ['failed', 'rejected'].includes(payment.status))
+  const paymentState =
+    paidAmount >= currentMovement.totalAmount
+      ? 'paid'
+      : paidAmount > 0
+        ? 'partial'
+        : hasPendingPayment
+          ? 'pending'
+          : hasFailedPayment
+            ? 'failed'
+            : 'pending'
 
   const nextMovement = serializeMovement({
     ...currentMovement,
@@ -293,7 +318,7 @@ const recalculateMovementPaymentStatus = async (movementId) => {
     paymentMethod: latestSettledPayment?.paymentMethod || currentMovement.paymentMethod || '',
     payload: {
       ...(isPlainObject(movementRecord.payload) ? movementRecord.payload : {}),
-      paymentState: paidAmount >= currentMovement.totalAmount ? 'paid' : paidAmount > 0 ? 'partial' : 'pending',
+      paymentState,
       updatedByPaymentService: true,
       updatedAt: new Date().toISOString(),
     },
@@ -314,7 +339,7 @@ const recalculateMovementPaymentStatus = async (movementId) => {
       auditLog: nextMovement.auditLog || [],
       payload: {
         ...(isPlainObject(movementRecord.payload) ? movementRecord.payload : {}),
-        paymentState: nextMovement.paymentState,
+        paymentState,
         updatedByPaymentService: true,
         updatedAt: new Date().toISOString(),
       },
@@ -387,6 +412,9 @@ const createPayment = async (payload = {}, user = {}) => {
   const provider = String(payload.provider || payload.paymentProvider || getConfiguredProviderName()).toLowerCase()
   const status = normalizePaymentStatus(payload.status || 'pending')
   const method = payload.method || payload.paymentMethod || provider
+  const isSandboxPayment =
+    provider === 'sandbox' ||
+    (provider === 'transbank' && String(process.env.TRANSBANK_ENV || 'integration').toLowerCase() !== 'production')
 
   if (amount <= 0) throw createError('El pago debe ser mayor a 0.', 400)
   if (amount > movement.pendingAmount) {
@@ -401,12 +429,12 @@ const createPayment = async (payload = {}, user = {}) => {
     provider,
     status,
     providerStatus: payload.providerStatus || status,
-    sandbox: provider === 'sandbox',
+    sandbox: isSandboxPayment,
     paymentsMode: getPaymentsMode(),
     metadata: {
       ...(isPlainObject(payload.metadata) ? payload.metadata : {}),
       source: payload.source || '',
-      testPrefix: provider === 'sandbox' ? TEST_PAYMENT_PREFIX : undefined,
+      testPrefix: isSandboxPayment ? TEST_PAYMENT_PREFIX : undefined,
     },
     createdById: user?.id || '',
     createdByEmail: user?.email || '',
@@ -447,7 +475,7 @@ const createPayment = async (payload = {}, user = {}) => {
     null,
     status,
     user,
-    { provider, sandbox: provider === 'sandbox' },
+    { provider, sandbox: isSandboxPayment },
   )
   const payment = await getPaymentById(createdPayment.id)
 
@@ -681,13 +709,304 @@ const createSandboxPaymentDemo = async (user = {}) => {
   }
 }
 
+const findPaymentByProviderToken = async (token) => {
+  if (!token) throw createError('token_ws es requerido.', 400)
+
+  if (!isPrismaMode()) {
+    const payment = dataAdapter
+      .list('payments')
+      .map(serializePayment)
+      .find((candidate) => candidate.providerPaymentId === token || candidate.reference === token)
+
+    if (!payment) throw createError('Pago Transbank no encontrado para el token recibido.', 404)
+    return findPaymentRecord(payment.id, { includeMovement: true })
+  }
+
+  const prisma = getPrisma()
+  const paymentByReference = await prisma.payment.findFirst({
+    where: { reference: token },
+    include: { financialMovement: true },
+  })
+  if (paymentByReference) return paymentByReference
+
+  const recentPayments = await prisma.payment.findMany({
+    include: { financialMovement: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  })
+  const paymentByPayload = recentPayments.find((payment) => {
+    const payload = isPlainObject(payment.payload) ? payment.payload : {}
+    return payload.providerPaymentId === token || payload.token === token
+  })
+
+  if (!paymentByPayload) throw createError('Pago Transbank no encontrado para el token recibido.', 404)
+  return paymentByPayload
+}
+
+const getSafeTransbankMetadata = (response = {}) => ({
+  amount: response.amount,
+  status: response.status,
+  buyOrder: response.buy_order,
+  sessionId: response.session_id,
+  accountingDate: response.accounting_date,
+  transactionDate: response.transaction_date,
+  authorizationCode: response.authorization_code,
+  paymentTypeCode: response.payment_type_code,
+  responseCode: response.response_code,
+  installmentsNumber: response.installments_number,
+})
+
+const createTransbankPaymentTransaction = async (paymentId, user = {}) => {
+  assertPaymentsEnabled()
+
+  const payment = await getPaymentById(paymentId)
+  if (payment.provider !== 'transbank') {
+    throw createError('El pago no esta configurado con provider transbank.', 400)
+  }
+
+  if (CLOSED_PAYMENT_STATUSES.has(payment.status)) {
+    throw createError(`El pago ya esta en estado ${payment.status}.`, 409)
+  }
+
+  const provider = getPaymentProvider('transbank')
+  const buyOrder = `rbk-${Date.now()}-${randomUUID().slice(0, 6)}`.slice(0, 26)
+  const sessionId = `rubik-${payment.id}`.slice(0, 61)
+  const returnUrl = buildTransbankReturnUrl()
+  const transaction = await provider.createTransaction({
+    buyOrder,
+    sessionId,
+    amount: payment.amount,
+    returnUrl,
+  })
+
+  const updated = await updatePaymentStatus(payment.id, 'pending', user, {
+    action: 'transbank_created',
+    provider: 'transbank',
+    sandbox: transaction.environment === 'integration',
+    providerStatus: transaction.providerStatus || 'created',
+    providerPaymentId: transaction.token,
+    transactionDate: new Date().toISOString(),
+    rawResponse: {
+      url: transaction.url,
+      token: transaction.token,
+      environment: transaction.environment,
+      providerStatus: transaction.providerStatus,
+    },
+    payload: {
+      provider: 'transbank',
+      providerPaymentId: transaction.token,
+      token: transaction.token,
+      providerStatus: transaction.providerStatus || 'created',
+      redirectUrl: transaction.url,
+      returnUrl,
+      buyOrder,
+      sessionId,
+      transbankEnvironment: transaction.environment,
+      metadata: {
+        ...payment.metadata,
+        buyOrder,
+        sessionId,
+        returnUrl,
+        transbankEnvironment: transaction.environment,
+      },
+    },
+  })
+
+  return {
+    ...updated,
+    redirect: {
+      url: transaction.url,
+      token: transaction.token,
+    },
+  }
+}
+
+const createFinanceMovementForTransbankDemo = async (user = {}) => {
+  assertPaymentsEnabled()
+
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const movementPayload = {
+    id: createId('fin-test-webpay'),
+    type: 'Ingreso',
+    category: 'Venta',
+    documentType: 'Comprobante Webpay sandbox',
+    documentNumber: `${TEST_PAYMENT_PREFIX} WEBPAY-${Date.now()}`,
+    client: 'Rubik Demo',
+    company: 'Rubik Creaciones',
+    description: `${TEST_PAYMENT_PREFIX} Webpay Plus sandbox demo Rubik`,
+    netAmount: 1000,
+    taxRate: 0,
+    taxAmount: 0,
+    isTaxExempt: true,
+    totalAmount: 1000,
+    paidAmount: 0,
+    pendingAmount: 1000,
+    issueDate: today,
+    dueDate: today,
+    status: 'Sin pagar',
+    paymentMethod: 'Webpay',
+    responsibleName: user?.name || '',
+    responsibleEmail: user?.email || '',
+    observations: `${TEST_PAYMENT_PREFIX} Webpay Plus sandbox demo sin movimiento real de dinero.`,
+    sourceType: 'transbank-webpay-demo',
+    auditLog: [
+      {
+        action: 'Movimiento demo Webpay sandbox creado',
+        userName: user?.name || '',
+        userEmail: user?.email || '',
+        createdAt: now.toISOString(),
+      },
+    ],
+    payload: {
+      testPrefix: TEST_PAYMENT_PREFIX,
+      sandbox: true,
+      paymentsMode: getPaymentsMode(),
+      provider: 'transbank',
+      transbankEnvironment: process.env.TRANSBANK_ENV || 'integration',
+      paymentState: 'pending',
+    },
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  }
+
+  const movement = await dataAdapter.create('financeMovements', 'fin', movementPayload)
+  return serializeMovement(movement)
+}
+
+const createTransbankPaymentDemo = async (user = {}) => {
+  assertPaymentsEnabled()
+
+  const movement = await createFinanceMovementForTransbankDemo(user)
+  const { payment: createdPayment, audit: createdAudit } = await createPayment(
+    {
+      financialMovementId: movement.id,
+      amount: 1000,
+      currency: DEFAULT_CURRENCY,
+      method: 'webpay',
+      paymentMethod: 'webpay',
+      provider: 'transbank',
+      status: 'pending',
+      observations: `${TEST_PAYMENT_PREFIX} Webpay Plus sandbox demo Rubik`,
+      source: 'transbank-webpay-demo',
+      metadata: { testPrefix: TEST_PAYMENT_PREFIX },
+    },
+    user,
+  )
+  const transaction = await createTransbankPaymentTransaction(createdPayment.id, user)
+
+  return {
+    ok: true,
+    movement: transaction.movement || movement,
+    payment: transaction.payment,
+    audit: [createdAudit, transaction.audit].filter(Boolean),
+    redirect: transaction.redirect,
+    message: 'Transaccion Webpay sandbox creada. No se movio dinero real.',
+  }
+}
+
+const confirmTransbankPayment = async ({ token, tokenType = 'token_ws' } = {}, user = {}) => {
+  const paymentRecord = await findPaymentByProviderToken(token)
+  const payment = serializePayment(paymentRecord)
+
+  if (tokenType === 'TBK_TOKEN') {
+    const updated = await updatePaymentStatus(payment.id, 'failed', user, {
+      action: 'transbank_return_aborted',
+      provider: 'transbank',
+      sandbox: true,
+      providerStatus: 'aborted',
+      providerPaymentId: token,
+      transactionDate: new Date().toISOString(),
+      rawResponse: { tokenType, token, status: 'aborted' },
+      payload: {
+        provider: 'transbank',
+        providerStatus: 'aborted',
+        metadata: {
+          ...payment.metadata,
+          tokenType,
+          transbankStatus: 'aborted',
+        },
+      },
+    })
+
+    return {
+      ...updated,
+      status: 'failed',
+      frontendUrl: buildFrontendPaymentUrl('failed', payment.id),
+    }
+  }
+
+  const provider = getPaymentProvider('transbank')
+
+  try {
+    const transbankResponse = await provider.commitTransaction(token)
+    const nextStatus = provider.mapTransbankStatus(transbankResponse)
+    const safeMetadata = getSafeTransbankMetadata(transbankResponse)
+    const updated = await updatePaymentStatus(payment.id, nextStatus, user, {
+      action: 'transbank_commit',
+      provider: 'transbank',
+      sandbox: true,
+      providerStatus: transbankResponse.status || nextStatus,
+      providerPaymentId: token,
+      transactionDate: transbankResponse.transaction_date || new Date().toISOString(),
+      rawResponse: safeMetadata,
+      payload: {
+        provider: 'transbank',
+        providerStatus: transbankResponse.status || nextStatus,
+        metadata: {
+          ...payment.metadata,
+          ...safeMetadata,
+          tokenType,
+        },
+      },
+    })
+
+    return {
+      ...updated,
+      status: nextStatus,
+      transbankResponse: safeMetadata,
+      frontendUrl: buildFrontendPaymentUrl(nextStatus, payment.id),
+    }
+  } catch (error) {
+    const updated = await updatePaymentStatus(payment.id, 'failed', user, {
+      action: 'transbank_commit_failed',
+      provider: 'transbank',
+      sandbox: true,
+      providerStatus: 'commit_failed',
+      providerPaymentId: token,
+      transactionDate: new Date().toISOString(),
+      rawResponse: { message: error.message || 'Transbank commit failed' },
+      payload: {
+        provider: 'transbank',
+        providerStatus: 'commit_failed',
+        metadata: {
+          ...payment.metadata,
+          tokenType,
+          transbankError: error.message || 'Transbank commit failed',
+        },
+      },
+    })
+
+    return {
+      ...updated,
+      status: 'failed',
+      error: error.message || 'Transbank commit failed',
+      frontendUrl: buildFrontendPaymentUrl('failed', payment.id),
+    }
+  }
+}
+
 module.exports = {
   approvePayment,
   cancelPayment,
   createFinanceMovementForPaymentDemo,
+  createFinanceMovementForTransbankDemo,
   createPayment,
   createPaymentAuditLog,
   createSandboxPaymentDemo,
+  createTransbankPaymentDemo,
+  createTransbankPaymentTransaction,
+  confirmTransbankPayment,
   getFinanceSummary,
   getPaymentAudit,
   getPaymentById,

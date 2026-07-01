@@ -46,7 +46,6 @@ const OWNER_EMAILS = [
 ]
 
 const FINANCE_DEMO_EMAILS = [
-  'rsepulveda@rubikcreaciones.cl',
   'r.rojas@rubikcreaciones.cl',
   'c.guzman@rubikcreaciones.cl',
   'brojas.romero@rubikcreaciones.cl',

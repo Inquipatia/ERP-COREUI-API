@@ -1,9 +1,11 @@
 const manualProvider = require('./manualProvider')
 const sandboxProvider = require('./sandboxProvider')
+const transbankProvider = require('./transbankProvider')
 
 const providers = {
   manual: manualProvider,
   sandbox: sandboxProvider,
+  transbank: transbankProvider,
 }
 
 const getPaymentProvider = (providerName = '') => {
