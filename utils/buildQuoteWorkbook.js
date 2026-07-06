@@ -8,6 +8,14 @@ const TEMPLATE_CANDIDATES = [
   DEFAULT_TEMPLATE_PATH,
   path.join(__dirname, '..', 'public', 'templates', TEMPLATE_FILE_NAME),
 ]
+const TEMPLATE_ASSETS_DIR = path.join(__dirname, '..', 'public', 'templates', 'assets')
+const BACKGROUND_TEMPLATE_WARNING = 'Background template not found, using default layout'
+const QUOTE_FOOTER_IMAGE_CANDIDATES = [
+  path.join(TEMPLATE_ASSETS_DIR, 'cotizacion-rubik-footer.png'),
+  path.join(TEMPLATE_ASSETS_DIR, 'cotizacion-rubik-background.png'),
+  path.join(TEMPLATE_ASSETS_DIR, 'cotizacion-rubik-background.jpg'),
+  path.join(TEMPLATE_ASSETS_DIR, 'cotizacion-rubik-background.jpeg'),
+]
 
 const ITEM_START_ROW = 17
 const ITEM_TEMPLATE_ROW = 17
@@ -18,6 +26,12 @@ const PRINT_LAST_COLUMN = 'H'
 const PRINT_LAST_COLUMN_INDEX = 8
 const A4_USABLE_PAGE_HEIGHT_POINTS = 800
 const MAX_EXCEL_ROW_HEIGHT = 408
+const CORPORATE_FOOTER_GAP_ROWS = 2
+const CORPORATE_FOOTER_HEIGHT_ROWS = 9
+const CORPORATE_FOOTER_IMAGE_SIZE = {
+  width: 540,
+  height: 140,
+}
 const COLUMN_WIDTHS = {
   A: 6.5,
   B: 22,
@@ -31,6 +45,32 @@ const COLUMN_WIDTHS = {
 
 const findQuoteTemplatePath = () =>
   TEMPLATE_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || DEFAULT_TEMPLATE_PATH
+
+let backgroundTemplateWarningLogged = false
+
+const warnMissingBackgroundTemplate = () => {
+  if (backgroundTemplateWarningLogged) return
+  console.warn(BACKGROUND_TEMPLATE_WARNING)
+  backgroundTemplateWarningLogged = true
+}
+
+const findFirstExistingPath = (candidates) => candidates.find((candidate) => fs.existsSync(candidate))
+
+const getQuoteFooterImagePath = () => {
+  const footerPath = findFirstExistingPath(QUOTE_FOOTER_IMAGE_CANDIDATES)
+
+  if (!footerPath) {
+    warnMissingBackgroundTemplate()
+  }
+
+  return footerPath
+}
+
+const getImageExtension = (filePath) => {
+  const extension = path.extname(filePath).replace('.', '').toLowerCase()
+  if (extension === 'jpg') return 'jpeg'
+  return extension || 'png'
+}
 
 const cloneStyle = (style = {}) => JSON.parse(JSON.stringify(style))
 
@@ -658,8 +698,8 @@ const normalizePayload = (inputPayload = {}) => {
 }
 
 const applyPrintSettings = (worksheet, rows) => {
-  const { items, extraRowsInserted, netRow, ivaRow, totalRow, lowerSectionRow } = rows
-  const lastContentRow = findLastContentRow(worksheet)
+  const { items, extraRowsInserted, netRow, ivaRow, totalRow, lowerSectionRow, printEndRow } = rows
+  const lastContentRow = Math.max(findLastContentRow(worksheet), printEndRow || 0)
   const printArea = `A1:${PRINT_LAST_COLUMN}${lastContentRow}`
 
   Object.entries(COLUMN_WIDTHS).forEach(([column, width]) => {
@@ -701,6 +741,41 @@ const applyPrintSettings = (worksheet, rows) => {
       showGridLines: false,
     },
   ]
+}
+
+const applyCorporateFooterBranding = (workbook, worksheet) => {
+  const footerPath = getQuoteFooterImagePath()
+
+  if (!footerPath) {
+    return { printEndRow: findLastContentRow(worksheet) }
+  }
+
+  const lastContentRow = findLastContentRow(worksheet)
+  const footerStartRow = lastContentRow + CORPORATE_FOOTER_GAP_ROWS
+  const footerEndRow = footerStartRow + CORPORATE_FOOTER_HEIGHT_ROWS - 1
+
+  for (let rowNumber = footerStartRow; rowNumber <= footerEndRow; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber)
+    row.height = 15.5
+    row.eachCell((cell) => {
+      cell.value = null
+      cell.border = {}
+      cell.fill = {}
+    })
+  }
+
+  const footerImageId = workbook.addImage({
+    filename: footerPath,
+    extension: getImageExtension(footerPath),
+  })
+
+  worksheet.addImage(footerImageId, {
+    tl: { col: 0, row: footerStartRow - 1 },
+    ext: CORPORATE_FOOTER_IMAGE_SIZE,
+    editAs: 'oneCell',
+  })
+
+  return { printEndRow: footerEndRow }
 }
 
 const createTemplateError = (templatePath) => {
@@ -891,6 +966,8 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     applyMoneyCellStyle(worksheet.getCell(`F${totalRow}`))
   }
 
+  const brandingRows = applyCorporateFooterBranding(workbook, worksheet)
+
   applyPrintSettings(worksheet, {
     items,
     extraRowsInserted,
@@ -898,6 +975,7 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     ivaRow,
     totalRow,
     lowerSectionRow,
+    printEndRow: brandingRows.printEndRow,
   })
 
   return workbook

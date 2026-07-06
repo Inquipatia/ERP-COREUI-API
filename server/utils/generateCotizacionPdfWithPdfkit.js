@@ -38,6 +38,14 @@ const COMPANY = {
 const projectRoot = path.join(__dirname, '..', '..')
 const frontendProjectRoot = path.join(projectRoot, '..', 'coreui-free-react-admin-template')
 const extractedLogoPath = path.join(projectRoot, 'public', 'templates', 'rubik-logo.png')
+const missingBackgroundWarning = 'Background template not found, using default layout'
+let missingBackgroundWarningLogged = false
+
+const quoteBackgroundCandidates = [
+  path.join(projectRoot, 'public', 'templates', 'assets', 'cotizacion-rubik-background.png'),
+  path.join(projectRoot, 'public', 'templates', 'assets', 'cotizacion-rubik-background.jpg'),
+  path.join(projectRoot, 'public', 'templates', 'assets', 'cotizacion-rubik-background.jpeg'),
+]
 
 const logoCandidates = [
   path.join(projectRoot, 'public', 'templates', 'rubik-logo.png'),
@@ -92,6 +100,25 @@ const table = {
 const tableWidth = table.widths.reduce((sum, width) => sum + width, 0)
 
 const safeText = (value = '') => String(value ?? '').trim()
+
+const getObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
+
+const firstText = (...values) => {
+  for (const value of values) {
+    const normalized = safeText(value)
+    if (normalized) return normalized
+  }
+
+  return ''
+}
+
+const textFromValue = (value, keys = []) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return firstText(...keys.map((key) => value[key]))
+  }
+
+  return safeText(value)
+}
 
 const numberValue = (value) => {
   if (value === '' || value === null || value === undefined) return 0
@@ -167,6 +194,37 @@ const getTotals = (quote = {}) => {
 }
 
 const findExistingPath = (candidates) => candidates.find((candidate) => fs.existsSync(candidate))
+
+const warnMissingBackground = () => {
+  if (missingBackgroundWarningLogged) return
+  console.warn(missingBackgroundWarning)
+  missingBackgroundWarningLogged = true
+}
+
+const getQuoteBackgroundPath = () => findExistingPath(quoteBackgroundCandidates)
+
+const hasBackgroundLayout = (doc) => Boolean(doc?._rubikQuoteBackgroundEnabled)
+
+const drawQuoteBackground = (doc, backgroundPath) => {
+  if (!backgroundPath) {
+    warnMissingBackground()
+    return false
+  }
+
+  try {
+    doc.image(backgroundPath, 0, 0, {
+      width: doc.page.width,
+      height: doc.page.height,
+    })
+    return true
+  } catch (error) {
+    console.warn('Background template could not be rendered, using default layout', {
+      backgroundPath,
+      error: error.message,
+    })
+    return false
+  }
+}
 
 const extractLogoFromTemplate = async () => {
   const templatePath = findExistingPath(templateCandidates)
@@ -245,7 +303,13 @@ const centerText = (doc, value, x, y, width, options = {}) =>
 const rightText = (doc, value, x, y, width, options = {}) =>
   text(doc, value, x, y, { ...options, align: 'right', width })
 
-const pageBottom = (doc) => doc.page.height - MARGIN
+const pageBottom = (doc) => doc.page.height - (hasBackgroundLayout(doc) ? 110 : MARGIN)
+
+const tableStartY = (doc) => (hasBackgroundLayout(doc) ? 344 : table.y)
+
+const templateBottomY = (doc) => (hasBackgroundLayout(doc) ? 486 : table.templateBottomY)
+
+const continuationStartY = (doc) => (hasBackgroundLayout(doc) ? 112 : 34)
 
 const drawFallbackLogo = (doc, x, y, width) => {
   centerText(doc, 'R U B I K', x, y, width, {
@@ -284,15 +348,19 @@ const drawLabelValueRow = (doc, x, y, labelWidth, valueWidth, rowHeight, label, 
   })
 }
 
-const drawHeader = (doc, quote, logoPath) => {
+const drawHeader = (doc, quote, logoPath, options = {}) => {
+  const useBackground = Boolean(options.useBackground)
+  const client = getObject(quote.client || quote.cliente)
+  const quoteDetails = getObject(quote.quote || quote.quoteData)
+  const seller = getObject(quote.seller || quote.vendedor)
   const leftX = CONTENT_X
-  const topY = 24
+  const topY = useBackground ? 104 : 24
   const quoteBlockWidth = 230
   const quoteBlockX = CONTENT_X + CONTENT_WIDTH - quoteBlockWidth
   const logoWidth = CONTENT_WIDTH - quoteBlockWidth - 8
   const rowHeight = 19
 
-  if (logoPath) {
+  if (!useBackground && logoPath) {
     try {
       doc.image(logoPath, leftX + 5, topY + 2, {
         fit: [logoWidth - 10, 90],
@@ -302,7 +370,7 @@ const drawHeader = (doc, quote, logoPath) => {
     } catch (_error) {
       drawFallbackLogo(doc, leftX, topY + 2, logoWidth)
     }
-  } else {
+  } else if (!useBackground) {
     drawFallbackLogo(doc, leftX, topY + 2, logoWidth)
   }
 
@@ -337,23 +405,23 @@ const drawHeader = (doc, quote, logoPath) => {
   const rightLabel = 76
   const valueLeft = leftWidth - leftLabel
   const valueRight = rightWidth - rightLabel
-  const baseY = 124
+  const baseY = useBackground ? 156 : 124
 
   drawLabelValueRow(doc, leftX, baseY, leftLabel, valueLeft, rowHeight, 'DIRECCIÓN', COMPANY.address)
   drawLabelValueRow(doc, leftX, baseY + rowHeight, leftLabel, valueLeft, rowHeight, 'TELÉFONO', COMPANY.phone)
   drawLabelValueRow(doc, leftX, baseY + rowHeight * 2, leftLabel, valueLeft, rowHeight, 'EMAIL', COMPANY.email)
-  drawLabelValueRow(doc, leftX, baseY + rowHeight * 3, leftLabel, valueLeft, rowHeight, 'CLIENTE', quote.client || quote.cliente)
-  drawLabelValueRow(doc, leftX, baseY + rowHeight * 4, leftLabel, valueLeft, rowHeight, 'EMPRESA', quote.company || quote.empresa)
-  drawLabelValueRow(doc, leftX, baseY + rowHeight * 5, leftLabel, valueLeft, rowHeight, 'ATENCIÓN', quote.contact || quote.atencion)
-  drawLabelValueRow(doc, leftX, baseY + rowHeight * 6, leftLabel, valueLeft, rowHeight, 'TEMA', quote.subject || quote.tema)
+  drawLabelValueRow(doc, leftX, baseY + rowHeight * 3, leftLabel, valueLeft, rowHeight, 'CLIENTE', textFromValue(quote.client || quote.cliente, ['name', 'client', 'cliente', 'attention', 'contact']))
+  drawLabelValueRow(doc, leftX, baseY + rowHeight * 4, leftLabel, valueLeft, rowHeight, 'EMPRESA', firstText(quote.company, quote.empresa, client.company, client.empresa, client.businessName))
+  drawLabelValueRow(doc, leftX, baseY + rowHeight * 5, leftLabel, valueLeft, rowHeight, 'ATENCIÓN', firstText(quote.contact, quote.atencion, client.attention, client.contact, client.name))
+  drawLabelValueRow(doc, leftX, baseY + rowHeight * 6, leftLabel, valueLeft, rowHeight, 'TEMA', firstText(quote.subject, quote.tema, quoteDetails.subject, quoteDetails.tema))
 
   drawLabelValueRow(doc, rightX, baseY, rightLabel, valueRight, rowHeight, 'N° COTIZACIÓN', getQuoteNumber(quote))
-  drawLabelValueRow(doc, rightX, baseY + rowHeight, rightLabel, valueRight, rowHeight, 'FECHA', formatDate(quote.date || quote.fecha))
-  drawLabelValueRow(doc, rightX, baseY + rowHeight * 2, rightLabel, valueRight, rowHeight, 'VENDEDOR', quote.seller || quote.vendedor)
-  drawLabelValueRow(doc, rightX, baseY + rowHeight * 3, rightLabel, valueRight, rowHeight, 'RUT CLIENTE', quote.rut || quote.rutCliente)
-  drawLabelValueRow(doc, rightX, baseY + rowHeight * 4, rightLabel, valueRight, rowHeight, 'TELÉFONO', quote.phone || quote.telefono)
-  drawLabelValueRow(doc, rightX, baseY + rowHeight * 5, rightLabel, valueRight, rowHeight, 'COMUNA', quote.commune || quote.comuna)
-  drawLabelValueRow(doc, rightX, baseY + rowHeight * 6, rightLabel, valueRight, rowHeight, 'CONDICIÓN', quote.condition || quote.condicion)
+  drawLabelValueRow(doc, rightX, baseY + rowHeight, rightLabel, valueRight, rowHeight, 'FECHA', formatDate(firstText(quote.date, quote.fecha, quoteDetails.date, quoteDetails.fecha)))
+  drawLabelValueRow(doc, rightX, baseY + rowHeight * 2, rightLabel, valueRight, rowHeight, 'VENDEDOR', textFromValue(quote.seller || quote.vendedor, ['name', 'nombre', 'seller', 'vendedor']))
+  drawLabelValueRow(doc, rightX, baseY + rowHeight * 3, rightLabel, valueRight, rowHeight, 'RUT CLIENTE', firstText(quote.rut, quote.rutCliente, client.rut))
+  drawLabelValueRow(doc, rightX, baseY + rowHeight * 4, rightLabel, valueRight, rowHeight, 'TELÉFONO', firstText(quote.phone, quote.telefono, client.phone, client.telefono))
+  drawLabelValueRow(doc, rightX, baseY + rowHeight * 5, rightLabel, valueRight, rowHeight, 'COMUNA', firstText(quote.commune, quote.comuna, client.commune, client.comuna))
+  drawLabelValueRow(doc, rightX, baseY + rowHeight * 6, rightLabel, valueRight, rowHeight, 'CONDICIÓN', firstText(quote.condition, quote.condicion, quoteDetails.condition, quoteDetails.condicion))
 
   rect(doc, leftX, baseY + rowHeight * 7, CONTENT_WIDTH, 44, {
     fill: COLORS.lightPink,
@@ -457,14 +525,15 @@ const drawItemRow = (doc, item, y, height) => {
 
 const addContinuationPage = (doc) => {
   doc.addPage(PAGE)
-  drawTableHeader(doc, 34)
-  return 34 + table.headerHeight
+  const y = continuationStartY(doc)
+  drawTableHeader(doc, y)
+  return y + table.headerHeight
 }
 
 const drawTemplateEmptyRows = (doc, y) => {
   let nextY = y
 
-  while (nextY + table.minRowHeight <= table.templateBottomY) {
+  while (nextY + table.minRowHeight <= templateBottomY(doc)) {
     drawEmptyItemRow(doc, nextY)
     nextY += table.minRowHeight
   }
@@ -475,7 +544,7 @@ const drawTemplateEmptyRows = (doc, y) => {
 const drawItemsTable = (doc, quote) => {
   const items = getItems(quote)
   const bottomLimit = pageBottom(doc) - 8
-  let y = table.y
+  let y = tableStartY(doc)
   let usedContinuationPage = false
 
   drawTableHeader(doc, y)
@@ -513,7 +582,7 @@ const ensureSpace = (doc, y, neededHeight) => {
   if (y + neededHeight <= pageBottom(doc)) return y
 
   doc.addPage(PAGE)
-  return 34
+  return continuationStartY(doc)
 }
 
 const drawBottomBlocks = (doc, quote, startY) => {
@@ -664,6 +733,7 @@ const drawBottomBlocks = (doc, quote, startY) => {
 
 const generateCotizacionPdfWithPdfkit = async (quote = {}) => {
   const logoPath = await resolveLogoPath()
+  const backgroundPath = getQuoteBackgroundPath()
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -680,7 +750,14 @@ const generateCotizacionPdfWithPdfkit = async (quote = {}) => {
     doc.on('error', reject)
 
     try {
-      drawHeader(doc, quote, logoPath)
+      const useBackground = drawQuoteBackground(doc, backgroundPath)
+      doc._rubikQuoteBackgroundEnabled = useBackground
+
+      if (useBackground) {
+        doc.on('pageAdded', () => drawQuoteBackground(doc, backgroundPath))
+      }
+
+      drawHeader(doc, quote, logoPath, { useBackground })
       const tableEndY = drawItemsTable(doc, quote)
       drawBottomBlocks(doc, quote, tableEndY)
       doc.end()
