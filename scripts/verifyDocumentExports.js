@@ -18,6 +18,8 @@ const summary = {
   documentExcelOk: false,
   quotePdfOk: false,
   quoteExcelOk: false,
+  longObservationPdfOk: false,
+  longObservationExcelOk: false,
   failures: [],
 }
 
@@ -65,9 +67,14 @@ const requestJson = async (endpoint, { method = 'GET', token, body } = {}) => {
   }
 }
 
-const requestFile = async (endpoint, { token, expectedContentType, label } = {}) => {
+const requestFile = async (endpoint, { method = 'GET', token, expectedContentType, label, body } = {}) => {
   const response = await fetch(buildUrl(endpoint), {
-    headers: token ? authHeaders(token) : {},
+    method,
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? authHeaders(token) : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
   })
   const responseForError = response.clone()
   const contentType = response.headers.get('content-type') || ''
@@ -112,6 +119,50 @@ const pickQuote = (quotes) =>
   quotes.find((quote) => quote?.id && (Array.isArray(quote.items) || Array.isArray(quote.quoteItems))) ||
   quotes.find((quote) => quote?.id) ||
   null
+
+const buildLongObservationPayload = () => {
+  const repeatedDescription = Array.from({ length: 18 }, (_, index) =>
+    `Descripcion tecnica extensa ${index + 1}: incluye fabricacion, terminaciones, instalacion, revision de arte y coordinacion operativa.`,
+  ).join(' ')
+  const repeatedObservation = Array.from({ length: 24 }, (_, index) =>
+    `Observacion operacional ${index + 1}: validar medidas, materialidad, permisos de acceso, embalaje y horario de entrega.`,
+  ).join(' ')
+
+  return {
+    quoteNumber: `VERIFY-LONG-${Date.now()}`,
+    date: new Date().toISOString().slice(0, 10),
+    client: {
+      name: 'Cliente Verificacion Export',
+      company: 'Rubik QA',
+      attention: 'Equipo QA',
+      rut: '76.000.000-0',
+      phone: '+56 9 0000 0000',
+      commune: 'Santiago',
+    },
+    seller: {
+      name: 'Verificador Rubik',
+    },
+    quote: {
+      subject: 'Validacion de textos largos en cotizacion',
+      condition: 'Prueba automatizada',
+      observations: 'Notas generales de prueba para asegurar que la caja de observaciones no rompe el documento.',
+    },
+    quoteItems: [
+      {
+        quantity: 1,
+        description: repeatedDescription,
+        unitValue: 125000,
+        total: 125000,
+        observacion: repeatedObservation,
+      },
+    ],
+    amounts: {
+      net: 125000,
+      iva: 23750,
+      total: 148750,
+    },
+  }
+}
 
 const main = async () => {
   if (typeof fetch !== 'function') {
@@ -170,6 +221,22 @@ const main = async () => {
       body: pdfHealth.payload,
     })
   }
+
+  const longObservationPayload = buildLongObservationPayload()
+  summary.longObservationPdfOk = await requestFile('/export/pdf', {
+    method: 'POST',
+    token,
+    body: longObservationPayload,
+    expectedContentType: 'application/pdf',
+    label: 'PDF con observacion larga',
+  })
+  summary.longObservationExcelOk = await requestFile('/export/excel', {
+    method: 'POST',
+    token,
+    body: longObservationPayload,
+    expectedContentType: EXCEL_CONTENT_TYPE,
+    label: 'Excel con observacion larga',
+  })
 
   const documentsResponse = await requestJson('/documents', { token })
   const documents = extractItems(documentsResponse.payload)
@@ -239,7 +306,9 @@ main()
       summary.documentPdfOk &&
       summary.documentExcelOk &&
       summary.quotePdfOk &&
-      summary.quoteExcelOk
+      summary.quoteExcelOk &&
+      summary.longObservationPdfOk &&
+      summary.longObservationExcelOk
 
     console.log(JSON.stringify(summary, null, 2))
     process.exitCode = summary.ok ? 0 : 1

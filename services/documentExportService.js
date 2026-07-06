@@ -17,6 +17,22 @@ const normalizeText = (value = '') =>
 const firstPresent = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== '') ?? undefined
 
+const getItemObservation = (item = {}) =>
+  String(
+    firstPresent(
+      item.observaciones,
+      item.observacion,
+      item.observation,
+      item.observations,
+      item.notes,
+      item.nota,
+      item.detalle,
+      item.comments,
+      item.comentarios,
+      '',
+    ),
+  )
+
 const getQuoteNumber = (payload = {}) =>
   String(
     firstPresent(
@@ -54,7 +70,7 @@ const getSafeItems = (source = {}, fallbackDescription = 'Documento ERP Rubik') 
         ),
         unitValue,
         total: explicitTotal === undefined ? quantity * unitValue : toNumber(explicitTotal),
-        observations: String(firstPresent(item.observations, item.observaciones, item.notes, '')),
+        observations: getItemObservation(item),
       }
     })
     .filter((item) => item.description || item.unitValue || item.total)
@@ -114,7 +130,15 @@ const buildQuoteExportPayload = (quote = {}) => {
       date: firstPresent(quote.date, quote.fecha, payloadQuote.date, payloadQuote.fecha),
       subject: firstPresent(quote.subject, payloadQuote.subject, payloadQuote.tema, ''),
       condition: firstPresent(quote.condition, payloadQuote.condition, payloadQuote.condicion, ''),
-      observations: firstPresent(quote.observations, payloadQuote.observations, payloadQuote.observaciones, ''),
+      observations: firstPresent(
+        quote.observations,
+        quote.observaciones,
+        quote.notes,
+        payloadQuote.observations,
+        payloadQuote.observaciones,
+        payloadQuote.notes,
+        '',
+      ),
       ivaRate: firstPresent(payloadQuote.ivaRate, payload.ivaRate, 19),
     },
     quoteItems: items,

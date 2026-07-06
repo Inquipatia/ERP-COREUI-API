@@ -91,13 +91,22 @@ const FONTS = {
 const table = {
   x: CONTENT_X,
   y: 318,
-  widths: [50, 245, 78, 78, 80],
+  widths: [44, 259, 78, 78, 72],
   headerHeight: 24,
-  minRowHeight: 20,
+  minRowHeight: 22,
+  maxRowHeight: 88,
   templateBottomY: 500,
 }
 
 const tableWidth = table.widths.reduce((sum, width) => sum + width, 0)
+const itemTextOptions = {
+  size: 7.2,
+  lineGap: 1,
+  padding: 5,
+}
+const itemCellMaxTextHeight = table.maxRowHeight - itemTextOptions.padding * 2
+const descriptionAnnexNotice = 'Ver descripcion completa en anexo'
+const observationAnnexNotice = 'Ver observacion completa en anexo'
 
 const safeText = (value = '') => String(value ?? '').trim()
 
@@ -170,8 +179,34 @@ const itemUnitValue = (item = {}) =>
 const itemDescription = (item = {}) =>
   safeText(item.description || item.descripcion || item.technicalDescription || item.name || '')
 
-const itemObservations = (item = {}) =>
-  safeText(item.observations || item.observaciones || item.notes || '')
+const getItemObservation = (item = {}) =>
+  safeText(
+    item.observaciones ||
+      item.observacion ||
+      item.observation ||
+      item.observations ||
+      item.notes ||
+      item.nota ||
+      item.detalle ||
+      item.comments ||
+      item.comentarios ||
+      '',
+  )
+
+const itemObservations = getItemObservation
+
+const getQuoteObservations = (quote = {}) => {
+  const quoteDetails = getObject(quote.quote || quote.quoteData)
+
+  return firstText(
+    quote.observations,
+    quote.observaciones,
+    quoteDetails.observations,
+    quoteDetails.observaciones,
+    quote.notes,
+    quote.notas,
+  )
+}
 
 const itemTotal = (item = {}) => {
   const explicitTotal = item.total ?? item.totalValue ?? item.valorTotal
@@ -464,20 +499,82 @@ const drawTableHeader = (doc, y) => {
   })
 }
 
-const getItemRowHeight = (doc, item) => {
-  doc.font(FONTS.regular).fontSize(7.2)
+const getCellTextHeight = (doc, value, width) => {
+  doc.font(FONTS.regular).fontSize(itemTextOptions.size)
 
-  const descriptionHeight = doc.heightOfString(itemDescription(item), {
-    width: table.widths[1] - 10,
-    lineGap: 1,
+  return doc.heightOfString(value, {
+    width,
+    lineGap: itemTextOptions.lineGap,
   })
+}
 
-  const observationsHeight = doc.heightOfString(itemObservations(item), {
-    width: table.widths[4] - 10,
-    lineGap: 1,
-  })
+const limitTextForCell = (doc, value, width, notice) => {
+  const fullText = safeText(value)
 
-  return Math.max(table.minRowHeight, descriptionHeight + 10, observationsHeight + 10)
+  if (!fullText) return { text: '', truncated: false }
+
+  if (getCellTextHeight(doc, fullText, width) <= itemCellMaxTextHeight) {
+    return { text: fullText, truncated: false }
+  }
+
+  const suffix = `\n${notice}`
+  let low = 0
+  let high = fullText.length
+  let best = notice
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const candidateBase = fullText.slice(0, middle).trimEnd()
+    const candidate = `${candidateBase}${candidateBase ? '...' : ''}${suffix}`
+
+    if (getCellTextHeight(doc, candidate, width) <= itemCellMaxTextHeight) {
+      best = candidate
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+
+  return { text: best, truncated: true }
+}
+
+const prepareItemRow = (doc, item, index) => {
+  const description = itemDescription(item)
+  const observations = itemObservations(item)
+  const descriptionWidth = table.widths[1] - itemTextOptions.padding * 2
+  const observationsWidth = table.widths[4] - itemTextOptions.padding * 2
+  const visibleDescription = limitTextForCell(doc, description, descriptionWidth, descriptionAnnexNotice)
+  const visibleObservations = limitTextForCell(doc, observations, observationsWidth, observationAnnexNotice)
+  const descriptionHeight = getCellTextHeight(doc, visibleDescription.text, descriptionWidth)
+  const observationsHeight = getCellTextHeight(doc, visibleObservations.text, observationsWidth)
+  const rowHeight = Math.max(
+    table.minRowHeight,
+    Math.min(table.maxRowHeight, descriptionHeight + itemTextOptions.padding * 2),
+    Math.min(table.maxRowHeight, observationsHeight + itemTextOptions.padding * 2),
+  )
+  const hasAnnex = visibleDescription.truncated || visibleObservations.truncated
+
+  return {
+    item,
+    index,
+    rowHeight,
+    values: [
+      { value: itemQuantity(item) || '', align: 'center' },
+      { value: visibleDescription.text, align: 'left' },
+      { value: formatCurrency(itemUnitValue(item)), align: 'right' },
+      { value: formatCurrency(itemTotal(item)), align: 'right' },
+      { value: visibleObservations.text, align: 'left' },
+    ],
+    annex: hasAnnex
+      ? {
+          itemNumber: index + 1,
+          description,
+          observation: observations,
+          descriptionTruncated: visibleDescription.truncated,
+          observationTruncated: visibleObservations.truncated,
+        }
+      : null,
+  }
 }
 
 const drawEmptyItemRow = (doc, y, height = table.minRowHeight) => {
@@ -492,18 +589,10 @@ const drawEmptyItemRow = (doc, y, height = table.minRowHeight) => {
   })
 }
 
-const drawItemRow = (doc, item, y, height) => {
-  const values = [
-    { value: itemQuantity(item) || '', align: 'center' },
-    { value: itemDescription(item), align: 'left' },
-    { value: formatCurrency(itemUnitValue(item)), align: 'right' },
-    { value: formatCurrency(itemTotal(item)), align: 'right' },
-    { value: itemObservations(item), align: 'left' },
-  ]
-
+const drawItemRow = (doc, preparedRow, y, height) => {
   let x = table.x
 
-  values.forEach((cell, index) => {
+  preparedRow.values.forEach((cell, index) => {
     const width = table.widths[index]
 
     rect(doc, x, y, width, height, {
@@ -511,12 +600,12 @@ const drawItemRow = (doc, item, y, height) => {
       stroke: COLORS.border,
     })
 
-    text(doc, cell.value, x + 5, y + 4.5, {
+    text(doc, cell.value, x + itemTextOptions.padding, y + 4.5, {
       align: cell.align,
       color: COLORS.text,
-      size: 7.2,
-      width: width - 10,
-      lineGap: 1,
+      size: itemTextOptions.size,
+      width: width - itemTextOptions.padding * 2,
+      lineGap: itemTextOptions.lineGap,
     })
 
     x += width
@@ -546,6 +635,7 @@ const drawItemsTable = (doc, quote) => {
   const bottomLimit = pageBottom(doc) - 8
   let y = tableStartY(doc)
   let usedContinuationPage = false
+  const annexEntries = []
 
   drawTableHeader(doc, y)
   y += table.headerHeight
@@ -556,26 +646,30 @@ const drawItemsTable = (doc, quote) => {
       color: COLORS.text,
       size: 8.5,
     })
-    return drawTemplateEmptyRows(doc, y + 30)
+    return { endY: drawTemplateEmptyRows(doc, y + 30), annexEntries }
   }
 
-  items.forEach((item) => {
-    const rowHeight = getItemRowHeight(doc, item)
+  items.forEach((item, index) => {
+    const preparedRow = prepareItemRow(doc, item, index)
+    const rowHeight = preparedRow.rowHeight
 
     if (y + rowHeight > bottomLimit) {
       y = addContinuationPage(doc)
       usedContinuationPage = true
     }
 
-    drawItemRow(doc, item, y, rowHeight)
+    drawItemRow(doc, preparedRow, y, rowHeight)
+    if (preparedRow.annex) {
+      annexEntries.push(preparedRow.annex)
+    }
     y += rowHeight
   })
 
   if (!usedContinuationPage && items.length <= 5) {
-    return drawTemplateEmptyRows(doc, y)
+    return { endY: drawTemplateEmptyRows(doc, y), annexEntries }
   }
 
-  return y
+  return { endY: y, annexEntries }
 }
 
 const ensureSpace = (doc, y, neededHeight) => {
@@ -583,6 +677,148 @@ const ensureSpace = (doc, y, neededHeight) => {
 
   doc.addPage(PAGE)
   return continuationStartY(doc)
+}
+
+const takeTextForHeight = (doc, value, width, maxHeight, options = {}) => {
+  const textValue = safeText(value)
+  const size = options.size || 7.8
+  const lineGap = options.lineGap || 1
+
+  if (!textValue) return { chunk: '', rest: '' }
+
+  doc.font(FONTS.regular).fontSize(size)
+
+  const heightFor = (candidate) =>
+    doc.heightOfString(candidate, {
+      width,
+      lineGap,
+    })
+
+  if (heightFor(textValue) <= maxHeight) {
+    return { chunk: textValue, rest: '' }
+  }
+
+  let low = 1
+  let high = textValue.length
+  let bestLength = 1
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const candidate = textValue.slice(0, middle).trimEnd()
+
+    if (heightFor(candidate) <= maxHeight) {
+      bestLength = middle
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+
+  const preferredBreak = textValue.lastIndexOf(' ', bestLength)
+  const cutAt = preferredBreak > Math.floor(bestLength * 0.65) ? preferredBreak : bestLength
+
+  return {
+    chunk: textValue.slice(0, cutAt).trim(),
+    rest: textValue.slice(cutAt).trim(),
+  }
+}
+
+const drawTitledTextSection = (doc, title, body, startY, options = {}) => {
+  let rest = safeText(body)
+  let y = startY
+  let isContinuation = false
+  const titleHeight = options.titleHeight || 21
+  const minTextHeight = options.minTextHeight || 34
+  const fontSize = options.fontSize || 7.8
+  const lineGap = options.lineGap || 1
+  const width = options.width || tableWidth
+  const x = options.x || table.x
+
+  while (rest) {
+    y = ensureSpace(doc, y, titleHeight + minTextHeight + 8)
+
+    const label = isContinuation ? `${title} (continuacion)` : title
+    rect(doc, x, y, width, titleHeight, {
+      fill: COLORS.lightPink,
+      stroke: COLORS.border,
+    })
+
+    text(doc, label, x + 5, y + 6.5, {
+      bold: true,
+      color: COLORS.blue,
+      size: options.titleSize || 9.5,
+      width: width - 10,
+    })
+
+    const textTop = y + titleHeight
+    const maxTextHeight = Math.max(minTextHeight, pageBottom(doc) - textTop - 10)
+    const { chunk, rest: nextRest } = takeTextForHeight(doc, rest, width - 12, maxTextHeight - 12, {
+      size: fontSize,
+      lineGap,
+    })
+    const textHeight = Math.max(
+      minTextHeight,
+      doc.font(FONTS.regular).fontSize(fontSize).heightOfString(chunk, {
+        width: width - 12,
+        lineGap,
+      }) + 14,
+    )
+
+    rect(doc, x, textTop, width, textHeight, {
+      fill: COLORS.white,
+      stroke: COLORS.border,
+    })
+
+    text(doc, chunk, x + 6, textTop + 8, {
+      color: COLORS.text,
+      size: fontSize,
+      width: width - 12,
+      lineGap,
+    })
+
+    y = textTop + textHeight + 8
+    rest = nextRest
+    isContinuation = true
+  }
+
+  return y
+}
+
+const drawExtendedObservations = (doc, entries = [], startY = continuationStartY(doc)) => {
+  if (!entries.length) return startY
+
+  let y = ensureSpace(doc, startY + 12, 58)
+
+  rect(doc, table.x, y, tableWidth, 24, {
+    fill: COLORS.header,
+    stroke: COLORS.border,
+  })
+
+  centerText(doc, 'Observaciones extendidas', table.x, y + 7, tableWidth, {
+    bold: true,
+    color: COLORS.white,
+    size: 10,
+  })
+
+  y += 32
+
+  entries.forEach((entry) => {
+    const body = [
+      entry.descriptionTruncated ? `Descripcion completa:\n${entry.description}` : `Producto/Servicio:\n${entry.description}`,
+      entry.observation ? `Observacion completa:\n${entry.observation}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
+    y = drawTitledTextSection(doc, `Item ${entry.itemNumber} - Producto/Servicio`, body, y, {
+      titleHeight: 18,
+      titleSize: 8.7,
+      fontSize: 7.4,
+      minTextHeight: 32,
+    })
+  })
+
+  return y
 }
 
 const drawBottomBlocks = (doc, quote, startY) => {
@@ -695,40 +931,14 @@ const drawBottomBlocks = (doc, quote, startY) => {
     },
   )
 
-  const observations = safeText(quote.observations || quote.observaciones)
+  let endY = y + 76
+  const observations = getQuoteObservations(quote)
 
   if (observations) {
-    doc.font(FONTS.regular).fontSize(7.8)
-    const observationTextHeight = doc.heightOfString(observations, {
-      width: tableWidth - 12,
-      lineGap: 1,
-    })
-    const observationHeight = Math.max(44, observationTextHeight + 30)
-    const obsY = ensureSpace(doc, y + 84, observationHeight)
-
-    rect(doc, x, obsY, tableWidth, 21, {
-      fill: COLORS.lightPink,
-      stroke: COLORS.border,
-    })
-
-    text(doc, 'Observaciones', x + 5, obsY + 6.5, {
-      bold: true,
-      color: COLORS.blue,
-      size: 9.5,
-    })
-
-    rect(doc, x, obsY + 21, tableWidth, observationHeight - 21, {
-      fill: COLORS.white,
-      stroke: COLORS.border,
-    })
-
-    text(doc, observations, x + 6, obsY + 29, {
-      color: COLORS.text,
-      size: 7.8,
-      width: tableWidth - 12,
-      lineGap: 1,
-    })
+    endY = drawTitledTextSection(doc, 'Observaciones', observations, y + 84)
   }
+
+  return endY
 }
 
 const generateCotizacionPdfWithPdfkit = async (quote = {}) => {
@@ -758,8 +968,9 @@ const generateCotizacionPdfWithPdfkit = async (quote = {}) => {
       }
 
       drawHeader(doc, quote, logoPath, { useBackground })
-      const tableEndY = drawItemsTable(doc, quote)
-      drawBottomBlocks(doc, quote, tableEndY)
+      const { endY: tableEndY, annexEntries } = drawItemsTable(doc, quote)
+      const bottomEndY = drawBottomBlocks(doc, quote, tableEndY)
+      drawExtendedObservations(doc, annexEntries, bottomEndY)
       doc.end()
     } catch (error) {
       reject(error)

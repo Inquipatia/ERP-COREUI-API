@@ -25,22 +25,26 @@ const MONEY_FORMAT = '"$"#,##0'
 const PRINT_LAST_COLUMN = 'H'
 const PRINT_LAST_COLUMN_INDEX = 8
 const A4_USABLE_PAGE_HEIGHT_POINTS = 800
-const MAX_EXCEL_ROW_HEIGHT = 408
+const MAX_EXCEL_ROW_HEIGHT = 104
 const CORPORATE_FOOTER_GAP_ROWS = 2
 const CORPORATE_FOOTER_HEIGHT_ROWS = 9
+const EXCEL_DESCRIPTION_PREVIEW_CHARS = 420
+const EXCEL_OBSERVATION_PREVIEW_CHARS = 190
+const DESCRIPTION_ANNEX_NOTICE = 'Ver descripcion completa en hoja Anexos'
+const OBSERVATION_ANNEX_NOTICE = 'Ver observacion completa en hoja Anexos'
 const CORPORATE_FOOTER_IMAGE_SIZE = {
   width: 540,
   height: 140,
 }
 const COLUMN_WIDTHS = {
-  A: 6.5,
-  B: 22,
-  C: 15,
-  D: 15,
+  A: 5.8,
+  B: 24,
+  C: 16,
+  D: 16,
   E: 11,
-  F: 10,
-  G: 10,
-  H: 13.5,
+  F: 10.5,
+  G: 10.5,
+  H: 16,
 }
 
 const findQuoteTemplatePath = () =>
@@ -158,6 +162,62 @@ const parseInputDate = (value) => {
 }
 
 const hasPresentValue = (value) => firstPresent(value) !== undefined
+
+const getItemObservation = (item = {}) =>
+  getText(
+    firstPresent(
+      item.observaciones,
+      item.observacion,
+      item.observation,
+      item.observations,
+      item.notes,
+      item.nota,
+      item.detalle,
+      item.comments,
+      item.comentarios,
+    ),
+  )
+
+const limitCellText = (value, maxChars, notice) => {
+  const text = getText(value)
+
+  if (text.length <= maxChars) {
+    return { text, truncated: false }
+  }
+
+  const preferredBreak = text.lastIndexOf(' ', maxChars)
+  const cutAt = preferredBreak > Math.floor(maxChars * 0.65) ? preferredBreak : maxChars
+
+  return {
+    text: `${text.slice(0, cutAt).trimEnd()}...\n${notice}`,
+    truncated: true,
+  }
+}
+
+const prepareExcelItem = (item, index) => {
+  const description = getText(item.description)
+  const observations = getItemObservation(item)
+  const visibleDescription = limitCellText(description, EXCEL_DESCRIPTION_PREVIEW_CHARS, DESCRIPTION_ANNEX_NOTICE)
+  const visibleObservations = limitCellText(observations, EXCEL_OBSERVATION_PREVIEW_CHARS, OBSERVATION_ANNEX_NOTICE)
+  const hasAnnex = visibleDescription.truncated || visibleObservations.truncated
+
+  return {
+    item: {
+      ...item,
+      description: visibleDescription.text,
+      observations: visibleObservations.text,
+    },
+    annex: hasAnnex
+      ? {
+          itemNumber: index + 1,
+          description,
+          observation: observations,
+          descriptionTruncated: visibleDescription.truncated,
+          observationTruncated: visibleObservations.truncated,
+        }
+      : null,
+  }
+}
 
 const safeUnmerge = (worksheet, range) => {
   try {
@@ -368,7 +428,7 @@ const estimateWrappedLines = (text, charactersPerLine) => {
 
 const estimateItemRowHeight = (item, baseHeight = 22) => {
   const descriptionLines = estimateWrappedLines(item.description, 58)
-  const observationLines = estimateWrappedLines(item.observations, 20)
+  const observationLines = estimateWrappedLines(item.observations, 24)
   const estimatedLines = Math.max(1, descriptionLines, observationLines)
 
   return Math.max(baseHeight, Math.min(MAX_EXCEL_ROW_HEIGHT, estimatedLines * 14 + 10))
@@ -619,7 +679,7 @@ const normalizePayload = (inputPayload = {}) => {
         ),
         unitValue,
         total: explicitTotal === undefined ? quantity * unitValue : getNumber(explicitTotal),
-        observations: getText(firstPresent(item.observations, item.observaciones, item.notes)),
+        observations: getItemObservation(item),
       }
     })
 
@@ -778,6 +838,109 @@ const applyCorporateFooterBranding = (workbook, worksheet) => {
   return { printEndRow: footerEndRow }
 }
 
+const styleAnnexCell = (cell, options = {}) => {
+  cell.alignment = {
+    vertical: options.vertical || 'top',
+    horizontal: options.horizontal || 'left',
+    wrapText: true,
+  }
+  cell.font = {
+    name: 'Arial',
+    size: options.fontSize || 10,
+    bold: Boolean(options.bold),
+    color: { argb: options.fontColor || 'FF182033' },
+  }
+  cell.border = {
+    top: { style: 'thin', color: { argb: 'FF6D5CFF' } },
+    left: { style: 'thin', color: { argb: 'FF6D5CFF' } },
+    bottom: { style: 'thin', color: { argb: 'FF6D5CFF' } },
+    right: { style: 'thin', color: { argb: 'FF6D5CFF' } },
+  }
+
+  if (options.fill) {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: options.fill },
+    }
+  }
+}
+
+const createExtendedObservationsSheet = (workbook, annexEntries = []) => {
+  if (!annexEntries.length) return null
+
+  const sheetName = 'Observaciones extendidas'
+  const worksheet = workbook.getWorksheet(sheetName) || workbook.addWorksheet(sheetName)
+
+  worksheet.spliceRows(1, worksheet.rowCount || 1)
+  worksheet.columns = [
+    { key: 'item', width: 10 },
+    { key: 'description', width: 58 },
+    { key: 'observation', width: 72 },
+  ]
+  worksheet.views = [{ showGridLines: false }]
+  worksheet.pageSetup = {
+    paperSize: 9,
+    orientation: 'portrait',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    horizontalCentered: true,
+    margins: {
+      left: 0.3,
+      right: 0.3,
+      top: 0.45,
+      bottom: 0.45,
+      header: 0,
+      footer: 0,
+    },
+  }
+
+  worksheet.getRow(1).values = ['Item', 'Producto/Servicio', 'Observacion completa']
+  worksheet.getRow(1).height = 24
+  worksheet.getRow(1).eachCell((cell) => {
+    styleAnnexCell(cell, {
+      bold: true,
+      fontColor: 'FFFFFFFF',
+      fill: 'FFE80F7A',
+      horizontal: 'center',
+      vertical: 'middle',
+    })
+  })
+
+  annexEntries.forEach((entry, index) => {
+    const row = worksheet.getRow(index + 2)
+    row.values = [
+      entry.itemNumber,
+      entry.description || '',
+      entry.observation || 'Sin observacion',
+    ]
+    row.height = Math.min(
+      300,
+      Math.max(
+        42,
+        Math.max(
+          estimateWrappedLines(entry.description, 58),
+          estimateWrappedLines(entry.observation, 72),
+        ) * 15 + 12,
+      ),
+    )
+    row.eachCell((cell) => styleAnnexCell(cell))
+    row.getCell(1).alignment = {
+      ...row.getCell(1).alignment,
+      horizontal: 'center',
+      vertical: 'top',
+    }
+  })
+
+  worksheet.autoFilter = {
+    from: 'A1',
+    to: `C${annexEntries.length + 1}`,
+  }
+
+  return worksheet
+}
+
 const createTemplateError = (templatePath) => {
   const error = new Error(`Template ${TEMPLATE_FILE_NAME} was not found at ${templatePath}.`)
   error.code = 'QUOTE_TEMPLATE_NOT_FOUND'
@@ -832,6 +995,8 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     throw error
   }
 
+  const preparedItems = items.map((item, index) => prepareExcelItem(item, index))
+  const annexEntries = preparedItems.map(({ annex }) => annex).filter(Boolean)
   const extraRowsNeeded = Math.max(0, items.length - availableItemRows)
   const extraRowsInserted = insertRowsBeforeLowerSection(worksheet, extraRowsNeeded, initialLowerSectionRow)
 
@@ -886,7 +1051,7 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
 
   applyHeaderSectionStyles(worksheet)
 
-  items.forEach((item, index) => {
+  preparedItems.forEach(({ item }, index) => {
     const rowNumber = itemTable.itemStartRow + index
 
     safeUnmerge(worksheet, `B${rowNumber}:D${rowNumber}`)
@@ -965,6 +1130,8 @@ const createQuoteWorkbook = async (quotePayload, options = {}) => {
     writeMoney(worksheet.getCell(`F${totalRow}`), data.amounts.total)
     applyMoneyCellStyle(worksheet.getCell(`F${totalRow}`))
   }
+
+  createExtendedObservationsSheet(workbook, annexEntries)
 
   const brandingRows = applyCorporateFooterBranding(workbook, worksheet)
 
