@@ -206,6 +206,7 @@ router.post('/:id/comment', requireAuth, canViewWorkOrders, async (request, resp
 router.use((error, request, response, next) => {
   const statusCode = error.statusCode || error.status || 500
 
+  console.error(error.stack || error)
   console.error('[workOrderRoutes] Error procesando orden de trabajo', {
     id: request.params?.id || request.params?.quoteId || request.params?.documentId || null,
     method: request.method,

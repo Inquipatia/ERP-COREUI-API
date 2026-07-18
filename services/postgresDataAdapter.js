@@ -865,6 +865,51 @@ const serializerByKey = {
 
 const serialize = (key, record) => (serializerByKey[key] || ((item) => item))(record)
 
+const legacyWorkOrderSelect = {
+  id: true,
+  title: true,
+  type: true,
+  client: true,
+  company: true,
+  quoteNumber: true,
+  requesterName: true,
+  requesterEmail: true,
+  requesterRole: true,
+  assigneeName: true,
+  assigneeEmail: true,
+  assigneeRole: true,
+  sourceArea: true,
+  targetArea: true,
+  priority: true,
+  status: true,
+  dueDate: true,
+  description: true,
+  requirements: true,
+  deliverables: true,
+  observations: true,
+  comments: true,
+  movements: true,
+  payload: true,
+  createdAt: true,
+  updatedAt: true,
+}
+
+const isPendingWorkOrderMigrationError = (error = {}) => {
+  const message = String(error.message || '')
+  const mysqlCode = String(error.meta?.code || '')
+
+  return (
+    error.code === 'P2021' ||
+    error.code === 'P2022' ||
+    ['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(mysqlCode) ||
+    /WorkOrder(Material|ChecklistItem|Evidence|Signature|StatusHistory)|workOrderNumber|Unknown column|doesn't exist|does not exist/i.test(message)
+  )
+}
+
+const logPendingWorkOrderMigrationFallback = (error) => {
+  console.error('[postgresDataAdapter] WorkOrder migration pendiente; usando consulta legacy.', error.stack || error)
+}
+
 const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== ''
 
 const getNaturalUniqueWhere = (key, data = {}) => {
@@ -1287,20 +1332,61 @@ const normalizeForPrisma = (key, payload = {}) => {
 
 const list = async (key) => {
   const model = getModel(key)
+  if (key === 'workOrders') {
+    try {
+      const records = await model.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: workOrderInclude,
+      })
+      return records.map((record) => serialize(key, record))
+    } catch (error) {
+      if (!isPendingWorkOrderMigrationError(error)) throw error
+      logPendingWorkOrderMigrationFallback(error)
+      const records = await model.findMany({
+        orderBy: { createdAt: 'desc' },
+        select: legacyWorkOrderSelect,
+      })
+      return records.map((record) => serialize(key, record))
+    }
+  }
+
   const records = await model.findMany({
     orderBy: { createdAt: 'desc' },
     ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
-    ...(key === 'workOrders' ? { include: workOrderInclude } : {}),
   })
   return records.map((record) => serialize(key, record))
 }
 
 const findById = async (key, id) => {
   const model = getModel(key)
+  if (key === 'workOrders') {
+    let record
+    try {
+      record = await model.findUnique({
+        where: { id },
+        include: workOrderInclude,
+      })
+    } catch (error) {
+      if (!isPendingWorkOrderMigrationError(error)) throw error
+      logPendingWorkOrderMigrationFallback(error)
+      record = await model.findUnique({
+        where: { id },
+        select: legacyWorkOrderSelect,
+      })
+    }
+
+    if (!record) {
+      const error = new Error('Registro no encontrado.')
+      error.statusCode = 404
+      throw error
+    }
+
+    return serialize(key, record)
+  }
+
   const record = await model.findUnique({
     where: { id },
     ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
-    ...(key === 'workOrders' ? { include: workOrderInclude } : {}),
   })
   if (!record) {
     const error = new Error('Registro no encontrado.')
