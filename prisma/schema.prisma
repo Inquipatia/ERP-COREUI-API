@@ -164,37 +164,44 @@ model Tender {
 }
 
 model WorkOrder {
-  id             String    @id
-  title          String
-  type           String
-  client         String?
-  company        String?
-  quoteNumber    String?
-  requesterName  String?
-  requesterEmail String?
-  requesterRole  String?
-  assigneeName   String?
-  assigneeEmail  String?
-  assigneeRole   String?
-  sourceArea     String?
-  targetArea     String?
-  priority       String    @default("Media")
-  status         String    @default("Pendiente")
-  dueDate        DateTime?
-  description    String?
-  requirements   String?
-  deliverables   String?
-  observations   String?
-  comments       Json?
-  movements      Json?
-  payload        Json?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id              String    @id
+  workOrderNumber String?   @unique
+  title           String
+  type            String
+  client          String?
+  company         String?
+  quoteNumber     String?
+  requesterName   String?
+  requesterEmail  String?
+  requesterRole   String?
+  assigneeName    String?
+  assigneeEmail   String?
+  assigneeRole    String?
+  sourceArea      String?
+  targetArea      String?
+  priority        String    @default("Media")
+  status          String    @default("Pendiente")
+  dueDate         DateTime?
+  description     String?
+  requirements    String?
+  deliverables    String?
+  observations    String?
+  comments        Json?
+  movements       Json?
+  payload         Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  workOrderMovements WorkOrderMovement[]
+  workOrderMovements      WorkOrderMovement[]
+  workOrderMaterials      WorkOrderMaterial[]
+  workOrderChecklistItems WorkOrderChecklistItem[]
+  workOrderEvidence       WorkOrderEvidence[]
+  workOrderSignatures     WorkOrderSignature[]
+  workOrderStatusHistory  WorkOrderStatusHistory[]
 
   @@index([status])
   @@index([priority])
+  @@index([type])
   @@index([targetArea])
   @@index([dueDate])
 }
@@ -218,6 +225,115 @@ model WorkOrderMovement {
 
   @@index([workOrderId])
   @@index([status])
+  @@index([createdAt])
+}
+
+model WorkOrderMaterial {
+  id           String   @id
+  workOrderId  String
+  materialId   String?
+  name         String
+  sku          String?
+  unit         String?
+  quantity     Decimal  @default(0) @db.Decimal(14, 2)
+  unitCost     Decimal  @default(0) @db.Decimal(14, 2)
+  totalCost    Decimal  @default(0) @db.Decimal(14, 2)
+  observations String?  @db.Text
+  payload      Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  material  Material? @relation(fields: [materialId], references: [id], onDelete: SetNull)
+
+  @@index([workOrderId])
+  @@index([materialId])
+  @@index([name])
+}
+
+model WorkOrderChecklistItem {
+  id             String    @id
+  workOrderId    String
+  label          String
+  category       String?
+  sortOrder      Int       @default(0)
+  isChecked      Boolean   @default(false)
+  checkedAt      DateTime?
+  checkedByName  String?
+  checkedByEmail String?
+  observations   String?   @db.Text
+  payload        Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([category])
+  @@index([isChecked])
+}
+
+model WorkOrderEvidence {
+  id              String    @id
+  workOrderId     String
+  type            String    @default("photo")
+  fileName        String?
+  fileUrl         String?
+  mimeType        String?
+  sizeBytes       Int?
+  description     String?   @db.Text
+  takenAt         DateTime?
+  uploadedByName  String?
+  uploadedByEmail String?
+  payload         Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model WorkOrderSignature {
+  id           String    @id
+  workOrderId  String
+  role         String?
+  signerName   String
+  signerRut    String?
+  signerEmail  String?
+  signatureUrl String?
+  dataUrl      String?   @db.LongText
+  fileName     String?
+  mimeType     String?
+  signedAt     DateTime?
+  payload      Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([role])
+  @@index([signedAt])
+}
+
+model WorkOrderStatusHistory {
+  id          String   @id
+  workOrderId String
+  fromStatus  String?
+  toStatus    String
+  comment     String?  @db.Text
+  userName    String?
+  userEmail   String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([toStatus])
   @@index([createdAt])
 }
 
@@ -393,7 +509,8 @@ model Material {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  supplier Supplier? @relation(fields: [supplierId], references: [id])
+  supplier           Supplier?           @relation(fields: [supplierId], references: [id])
+  workOrderMaterials WorkOrderMaterial[]
 
   @@index([name])
   @@index([category])

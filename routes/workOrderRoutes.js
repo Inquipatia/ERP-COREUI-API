@@ -50,6 +50,46 @@ router.get('/activity', requireAuth, canViewWorkOrders, async (request, response
   }
 })
 
+router.get('/taller-instalacion/drafts', requireAuth, canViewWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.listTallerInstallationDrafts(request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/taller-instalacion/drafts', requireAuth, canCreateWorkOrders, async (request, response, next) => {
+  try {
+    response.status(201).json(await workOrderService.createTallerInstallationDraft(request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/taller-instalacion/drafts/:id', requireAuth, canViewWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.getTallerInstallationDraftById(request.params.id, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.patch('/taller-instalacion/drafts/:id', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.updateTallerInstallationDraft(request.params.id, request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.put('/taller-instalacion/drafts/:id', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.updateTallerInstallationDraft(request.params.id, request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.post('/from-quote/:quoteId', requireAuth, canCreateWorkOrders, async (request, response, next) => {
   try {
     response.status(201).json(

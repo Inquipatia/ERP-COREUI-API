@@ -91,7 +91,7 @@ const FONTS = {
 const table = {
   x: CONTENT_X,
   y: 318,
-  widths: [44, 259, 78, 78, 72],
+  widths: [41, 245, 72, 72, 101],
   headerHeight: 24,
   minRowHeight: 22,
   maxRowHeight: 88,
@@ -190,6 +190,8 @@ const getItemObservation = (item = {}) =>
       item.detalle ||
       item.comments ||
       item.comentarios ||
+      item.observacionItem ||
+      item.itemObservation ||
       '',
   )
 

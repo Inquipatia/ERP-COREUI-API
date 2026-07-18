@@ -29,6 +29,8 @@ const getItemObservation = (item = {}) =>
       item.detalle,
       item.comments,
       item.comentarios,
+      item.observacionItem,
+      item.itemObservation,
       '',
     ),
   )

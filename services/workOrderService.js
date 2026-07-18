@@ -1,4 +1,11 @@
+const { randomUUID } = require('crypto')
 const dataAdapter = require('./dataAdapter')
+
+const WORK_ORDER_TYPES = {
+  TALLER_INSTALACION: 'TALLER_INSTALACION',
+}
+
+const createLocalId = (prefix) => `${prefix}-${Date.now()}-${randomUUID().slice(0, 8)}`
 
 const STATUS_LABELS = {
   draft: 'Borrador',
@@ -63,6 +70,20 @@ const normalizePriority = (priority = '') => {
   return ['baja', 'media', 'alta', 'urgente'].includes(normalized) ? normalized : 'media'
 }
 
+const normalizeWorkOrderType = (type = '') => {
+  const rawType = String(type || '').trim()
+  const normalized = normalizeText(rawType).replace(/[\s-]+/g, '_')
+
+  if (['taller_instalacion', 'instalacion_taller', 'taller'].includes(normalized)) {
+    return WORK_ORDER_TYPES.TALLER_INSTALACION
+  }
+
+  return rawType || 'Produccion grafica'
+}
+
+const isTallerInstallationWorkOrder = (workOrder = {}) =>
+  normalizeWorkOrderType(workOrder.type || workOrder.workOrderType) === WORK_ORDER_TYPES.TALLER_INSTALACION
+
 const getDateOnly = (value) => {
   if (!value) return ''
   const parsed = new Date(value)
@@ -122,20 +143,151 @@ const countBy = (items = [], selector, fallback = 'Sin clasificar') =>
     .map(([label, count]) => ({ label, count, value: count }))
     .sort((first, second) => second.count - first.count || first.label.localeCompare(second.label))
 
+const ensurePayloadObject = (payload = {}) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createError('El cuerpo de la orden de trabajo debe ser un objeto JSON valido.', 400)
+  }
+}
+
+const getFirstArray = (...values) => values.find((value) => Array.isArray(value)) || []
+
+const validateArrayField = (payload = {}, fieldName, aliases = []) => {
+  const fieldNames = [fieldName, ...aliases]
+  const provided = fieldNames.find((name) => payload[name] !== undefined)
+  if (!provided) return
+
+  if (!Array.isArray(payload[provided])) {
+    throw createError(`El campo ${provided} debe ser un arreglo.`, 400)
+  }
+
+  if (payload[provided].length > 200) {
+    throw createError(`El campo ${provided} no puede superar 200 registros.`, 400)
+  }
+
+  payload[provided].forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw createError(`El campo ${provided}[${index}] debe ser un objeto.`, 400)
+    }
+  })
+}
+
+const validateWorkOrderPayload = (payload = {}) => {
+  ensurePayloadObject(payload)
+  validateArrayField(payload, 'materials')
+  validateArrayField(payload, 'checklistItems')
+  validateArrayField(payload, 'evidence', ['photographicEvidence'])
+  validateArrayField(payload, 'signatures')
+  validateArrayField(payload, 'statusHistory')
+
+  getFirstArray(payload.materials).forEach((item, index) => {
+    const quantity = Number(item.quantity ?? item.cantidad ?? 0)
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      throw createError(`materials[${index}].quantity debe ser un numero mayor o igual a 0.`, 400)
+    }
+
+    const unitCost = Number(item.unitCost ?? item.cost ?? item.costoUnitario ?? 0)
+    if (!Number.isFinite(unitCost) || unitCost < 0) {
+      throw createError(`materials[${index}].unitCost debe ser un numero mayor o igual a 0.`, 400)
+    }
+
+    const totalCost = Number(item.totalCost ?? item.total ?? quantity * unitCost)
+    if (!Number.isFinite(totalCost) || totalCost < 0) {
+      throw createError(`materials[${index}].totalCost debe ser un numero mayor o igual a 0.`, 400)
+    }
+  })
+}
+
+const normalizeMaterialItems = (items = []) =>
+  getFirstArray(items).map((item, index) => {
+    const quantity = Number(item.quantity ?? item.cantidad ?? 0)
+    const unitCost = Number(item.unitCost ?? item.cost ?? item.costoUnitario ?? 0)
+    const totalCost = Number(item.totalCost ?? item.total ?? quantity * unitCost)
+
+    return {
+      ...item,
+      id: item.id || createLocalId(`wom-${index + 1}`),
+      materialId: item.materialId || '',
+      name: item.name || item.materialName || item.description || item.descripcion || `Material ${index + 1}`,
+      sku: item.sku || '',
+      unit: item.unit || item.unidad || '',
+      quantity,
+      unitCost,
+      totalCost,
+      observations: item.observations || item.observaciones || '',
+    }
+  })
+
+const normalizeChecklistItems = (items = []) =>
+  getFirstArray(items).map((item, index) => ({
+    ...item,
+    id: item.id || createLocalId(`woc-${index + 1}`),
+    label: item.label || item.name || item.title || `Checklist ${index + 1}`,
+    category: item.category || item.section || '',
+    sortOrder: Number.isFinite(Number(item.sortOrder ?? item.order ?? index)) ? Number(item.sortOrder ?? item.order ?? index) : index,
+    isChecked: Boolean(item.isChecked ?? item.checked ?? item.done),
+    observations: item.observations || item.notes || '',
+  }))
+
+const normalizeEvidenceItems = (items = []) =>
+  getFirstArray(items).map((item, index) => ({
+    ...item,
+    id: item.id || createLocalId(`woe-${index + 1}`),
+    type: item.type || item.kind || 'photo',
+    fileName: item.fileName || item.filename || item.name || '',
+    fileUrl: item.fileUrl || item.url || item.publicUrl || '',
+    mimeType: item.mimeType || item.mimetype || '',
+    description: item.description || item.observations || '',
+  }))
+
+const normalizeSignatureItems = (items = []) =>
+  getFirstArray(items).map((item, index) => ({
+    ...item,
+    id: item.id || createLocalId(`wos-${index + 1}`),
+    role: item.role || item.type || '',
+    signerName: item.signerName || item.name || `Firmante ${index + 1}`,
+    signerRut: item.signerRut || item.rut || '',
+    signerEmail: item.signerEmail || item.email || '',
+    signedAt: item.signedAt || '',
+  }))
+
+const normalizeStatusHistoryItems = (items = []) =>
+  getFirstArray(items).map((item, index) => ({
+    ...item,
+    id: item.id || createLocalId(`woh-${index + 1}`),
+    fromStatus: item.fromStatus || '',
+    toStatus: normalizeStatus(item.toStatus || item.status),
+    comment: item.comment || item.observations || '',
+    userName: item.userName || '',
+    userEmail: item.userEmail || '',
+    createdAt: item.createdAt || new Date().toISOString(),
+  }))
+
+const createStatusHistoryItem = ({ fromStatus = '', toStatus = 'draft', comment = '', user = {} } = {}) => ({
+  id: createLocalId('woh'),
+  fromStatus,
+  toStatus: normalizeStatus(toStatus),
+  comment,
+  userName: user.name || '',
+  userEmail: user.email || '',
+  createdAt: new Date().toISOString(),
+})
+
 const normalizeWorkOrderPayload = (payload = {}, user = {}) => {
   const status = normalizeStatus(payload.status || payload.statusLabel)
   const priority = normalizePriority(payload.priority || payload.priorityLabel)
+  const type = normalizeWorkOrderType(payload.type || payload.workOrderType)
   const now = new Date().toISOString()
   const assignedArea = payload.assignedArea || payload.targetArea || payload.areaResponsable || 'Diseño'
   const assignedToName = payload.assignedToName || payload.assigneeName || payload.assignedTo || ''
   const createdByName = payload.createdByName || payload.requesterName || user.name || ''
   const workOrderNumber = payload.workOrderNumber || payload.number || `OT-${Date.now()}`
+  const evidence = normalizeEvidenceItems(getFirstArray(payload.evidence, payload.photographicEvidence))
 
   return {
     ...payload,
     workOrderNumber,
     title: payload.title || 'Orden de trabajo',
-    type: payload.type || 'Producción gráfica',
+    type,
     client: payload.clientName || payload.client || payload.cliente || '',
     clientName: payload.clientName || payload.client || payload.cliente || '',
     company: payload.company || payload.empresa || '',
@@ -166,6 +318,12 @@ const normalizeWorkOrderPayload = (payload = {}, user = {}) => {
     items: Array.isArray(payload.items) ? payload.items : [],
     tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
     attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+    materials: normalizeMaterialItems(payload.materials),
+    checklistItems: normalizeChecklistItems(payload.checklistItems),
+    evidence,
+    photographicEvidence: evidence,
+    signatures: normalizeSignatureItems(payload.signatures),
+    statusHistory: normalizeStatusHistoryItems(payload.statusHistory),
     createdAt: payload.createdAt || now,
     updatedAt: now,
   }
@@ -182,15 +340,95 @@ const getWorkOrderById = async (id, user = {}) => {
   return item
 }
 
+const ensureInitialStatusHistory = (workOrder = {}, user = {}) => {
+  if (Array.isArray(workOrder.statusHistory) && workOrder.statusHistory.length) return workOrder
+
+  return {
+    ...workOrder,
+    statusHistory: [
+      createStatusHistoryItem({
+        toStatus: workOrder.status || 'pending',
+        comment: 'Orden de trabajo creada.',
+        user,
+      }),
+    ],
+  }
+}
+
 const createWorkOrder = async (payload = {}, user = {}) => {
-  const workOrder = normalizeWorkOrderPayload(payload, user)
+  validateWorkOrderPayload(payload)
+  const workOrder = ensureInitialStatusHistory(normalizeWorkOrderPayload(payload, user), user)
   return normalizeWorkOrderPayload(await dataAdapter.create('workOrders', 'wo', workOrder), user)
 }
 
 const updateWorkOrder = async (id, payload = {}, user = {}) => {
+  validateWorkOrderPayload(payload)
   const current = await getWorkOrderById(id, user)
   const next = normalizeWorkOrderPayload({ ...current, ...payload, id }, user)
+  const currentStatus = normalizeStatus(current.status)
+  const nextStatus = normalizeStatus(next.status)
+
+  if (currentStatus !== nextStatus) {
+    next.statusHistory = [
+      createStatusHistoryItem({
+        fromStatus: currentStatus,
+        toStatus: nextStatus,
+        comment: payload.statusComment || payload.comment || 'Cambio de estado.',
+        user,
+      }),
+      ...normalizeStatusHistoryItems(getFirstArray(payload.statusHistory, current.statusHistory)),
+    ]
+  }
+
   return normalizeWorkOrderPayload(await dataAdapter.update('workOrders', id, next), user)
+}
+
+const listTallerInstallationDrafts = async (user = {}) => {
+  const { items } = await listWorkOrders(user)
+  return {
+    items: items.filter(
+      (item) => isTallerInstallationWorkOrder(item) && normalizeStatus(item.status || item.statusLabel) === 'draft',
+    ),
+  }
+}
+
+const createTallerInstallationDraft = async (payload = {}, user = {}) =>
+  createWorkOrder(
+    {
+      ...payload,
+      title: payload.title || 'OT Taller Instalacion',
+      type: WORK_ORDER_TYPES.TALLER_INSTALACION,
+      status: 'draft',
+      priority: payload.priority || 'media',
+      sourceArea: payload.sourceArea || user.area || 'Ventas',
+      assignedArea: payload.assignedArea || payload.targetArea || 'Taller/Instalacion',
+      targetArea: payload.targetArea || payload.assignedArea || 'Taller/Instalacion',
+    },
+    user,
+  )
+
+const getTallerInstallationDraftById = async (id, user = {}) => {
+  const workOrder = await getWorkOrderById(id, user)
+
+  if (!isTallerInstallationWorkOrder(workOrder) || normalizeStatus(workOrder.status || workOrder.statusLabel) !== 'draft') {
+    throw createError('Borrador TALLER_INSTALACION no encontrado.', 404)
+  }
+
+  return workOrder
+}
+
+const updateTallerInstallationDraft = async (id, payload = {}, user = {}) => {
+  const current = await getTallerInstallationDraftById(id, user)
+  return updateWorkOrder(
+    id,
+    {
+      ...payload,
+      id: current.id,
+      type: WORK_ORDER_TYPES.TALLER_INSTALACION,
+      status: 'draft',
+    },
+    user,
+  )
 }
 
 const deleteWorkOrder = async (id) => dataAdapter.remove('workOrders', id)
@@ -300,14 +538,19 @@ const getWorkOrderActivity = async (user = {}) => {
 module.exports = {
   createFromDocument,
   createFromQuote,
+  createTallerInstallationDraft,
   createWorkOrder,
   deleteWorkOrder,
+  getTallerInstallationDraftById,
   getWorkOrderActivity,
   getWorkOrderById,
   getWorkOrderStats,
   listWorkOrders,
+  listTallerInstallationDrafts,
   normalizePriority,
   normalizeStatus,
   normalizeWorkOrderPayload,
+  updateTallerInstallationDraft,
   updateWorkOrder,
+  WORK_ORDER_TYPES,
 }

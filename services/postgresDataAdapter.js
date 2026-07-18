@@ -286,6 +286,12 @@ const toIso = (value) => {
 
 const toNumber = (value) => Number(value || 0)
 
+const toIntegerOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? Math.trunc(numberValue) : null
+}
+
 const emptyToNull = (value) => (value === '' || value === undefined ? null : value)
 
 const WORK_ORDER_STATUS_LABELS = {
@@ -337,6 +343,19 @@ const normalizeWorkOrderPriority = (priority = '') => {
   const normalizedPriority = normalizeText(priority)
   if (['baja', 'media', 'alta', 'urgente'].includes(normalizedPriority)) return normalizedPriority
   return 'media'
+}
+
+const WORK_ORDER_TYPE_TALLER_INSTALACION = 'TALLER_INSTALACION'
+
+const normalizeWorkOrderType = (type = '') => {
+  const rawType = String(type || '').trim()
+  const normalizedType = normalizeText(rawType).replace(/[\s-]+/g, '_')
+
+  if (['taller_instalacion', 'instalacion_taller', 'taller'].includes(normalizedType)) {
+    return WORK_ORDER_TYPE_TALLER_INSTALACION
+  }
+
+  return rawType || 'Administrativo'
 }
 
 const sanitizeUser = (user = {}) => {
@@ -552,6 +571,85 @@ const serializeTender = (record = {}) => ({
   updatedAt: toIso(record.updatedAt),
 })
 
+const serializeWorkOrderMaterial = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  materialId: record.materialId || '',
+  name: record.name || '',
+  sku: record.sku || '',
+  unit: record.unit || '',
+  quantity: toNumber(record.quantity),
+  unitCost: toNumber(record.unitCost),
+  totalCost: toNumber(record.totalCost),
+  observations: record.observations || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeWorkOrderChecklistItem = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  label: record.label || '',
+  category: record.category || '',
+  sortOrder: Number(record.sortOrder || 0),
+  isChecked: Boolean(record.isChecked),
+  checkedAt: toIso(record.checkedAt),
+  checkedByName: record.checkedByName || '',
+  checkedByEmail: record.checkedByEmail || '',
+  observations: record.observations || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeWorkOrderEvidence = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  type: record.type || 'photo',
+  fileName: record.fileName || '',
+  fileUrl: record.fileUrl || '',
+  url: record.fileUrl || '',
+  mimeType: record.mimeType || '',
+  sizeBytes: record.sizeBytes ?? null,
+  description: record.description || '',
+  takenAt: toIso(record.takenAt),
+  uploadedByName: record.uploadedByName || '',
+  uploadedByEmail: record.uploadedByEmail || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeWorkOrderSignature = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  role: record.role || '',
+  signerName: record.signerName || '',
+  signerRut: record.signerRut || '',
+  signerEmail: record.signerEmail || '',
+  signatureUrl: record.signatureUrl || '',
+  dataUrl: record.dataUrl || '',
+  fileName: record.fileName || '',
+  mimeType: record.mimeType || '',
+  signedAt: toIso(record.signedAt),
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+  updatedAt: toIso(record.updatedAt),
+})
+
+const serializeWorkOrderStatusHistory = (record = {}) => ({
+  id: record.id,
+  workOrderId: record.workOrderId || '',
+  fromStatus: record.fromStatus || '',
+  toStatus: record.toStatus || '',
+  comment: record.comment || '',
+  userName: record.userName || '',
+  userEmail: record.userEmail || '',
+  payload: record.payload || null,
+  createdAt: toIso(record.createdAt),
+})
+
 const serializeWorkOrder = (record = {}) => {
   const payload = record.payload && typeof record.payload === 'object' ? record.payload : {}
   const status = normalizeWorkOrderStatus(payload.status || record.status)
@@ -568,10 +666,37 @@ const serializeWorkOrder = (record = {}) => {
       : Array.isArray(payload.workflowLog)
         ? payload.workflowLog
         : []
+  const materials = Array.isArray(record.workOrderMaterials) && record.workOrderMaterials.length
+    ? record.workOrderMaterials.map(serializeWorkOrderMaterial)
+    : Array.isArray(payload.materials)
+      ? payload.materials
+      : []
+  const checklistItems = Array.isArray(record.workOrderChecklistItems) && record.workOrderChecklistItems.length
+    ? record.workOrderChecklistItems.map(serializeWorkOrderChecklistItem)
+    : Array.isArray(payload.checklistItems)
+      ? payload.checklistItems
+      : []
+  const evidence = Array.isArray(record.workOrderEvidence) && record.workOrderEvidence.length
+    ? record.workOrderEvidence.map(serializeWorkOrderEvidence)
+    : Array.isArray(payload.evidence)
+      ? payload.evidence
+      : Array.isArray(payload.photographicEvidence)
+        ? payload.photographicEvidence
+        : []
+  const signatures = Array.isArray(record.workOrderSignatures) && record.workOrderSignatures.length
+    ? record.workOrderSignatures.map(serializeWorkOrderSignature)
+    : Array.isArray(payload.signatures)
+      ? payload.signatures
+      : []
+  const statusHistory = Array.isArray(record.workOrderStatusHistory) && record.workOrderStatusHistory.length
+    ? record.workOrderStatusHistory.map(serializeWorkOrderStatusHistory)
+    : Array.isArray(payload.statusHistory)
+      ? payload.statusHistory
+      : []
 
   return {
     ...record,
-    workOrderNumber: payload.workOrderNumber || payload.number || record.id,
+    workOrderNumber: record.workOrderNumber || payload.workOrderNumber || payload.number || record.id,
     clientId: payload.clientId || '',
     clientName: payload.clientName || record.client || '',
     quoteId: payload.quoteId || '',
@@ -593,6 +718,12 @@ const serializeWorkOrder = (record = {}) => {
     tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
     details: payload.details || record.requirements || '',
     attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+    materials,
+    checklistItems,
+    evidence,
+    photographicEvidence: evidence,
+    signatures,
+    statusHistory,
     notes: payload.notes || record.observations || '',
     comments,
     movements,
@@ -719,6 +850,11 @@ const serializerByKey = {
   tenders: serializeTender,
   workOrders: serializeWorkOrder,
   workOrderMovements: serializeWorkOrderMovement,
+  workOrderMaterials: serializeWorkOrderMaterial,
+  workOrderChecklistItems: serializeWorkOrderChecklistItem,
+  workOrderEvidence: serializeWorkOrderEvidence,
+  workOrderSignatures: serializeWorkOrderSignature,
+  workOrderStatusHistory: serializeWorkOrderStatusHistory,
   suppliers: serializeSupplier,
   financeMovements: serializeFinancialMovement,
   expenses: serializeExpense,
@@ -908,6 +1044,7 @@ const normalizeForPrisma = (key, payload = {}) => {
   if (key === 'workOrders') {
     const status = normalizeWorkOrderStatus(payload.status || payload.statusLabel)
     const priority = normalizeWorkOrderPriority(payload.priority || payload.priorityLabel)
+    const type = normalizeWorkOrderType(payload.type || payload.workOrderType)
     const targetArea = payload.assignedArea || payload.targetArea || payload.areaResponsable || ''
     const assigneeName = payload.assignedToName || payload.assigneeName || payload.assignedTo || ''
     const requesterName = payload.createdByName || payload.requesterName || payload.requestedBy || ''
@@ -916,6 +1053,7 @@ const normalizeForPrisma = (key, payload = {}) => {
     const payloadMetadata = {
       ...payload,
       workOrderNumber,
+      type,
       clientId: payload.clientId || '',
       clientName: payload.clientName || payload.client || payload.cliente || '',
       quoteId: payload.quoteId || payload.sourceQuoteId || '',
@@ -936,6 +1074,20 @@ const normalizeForPrisma = (key, payload = {}) => {
       tasks: Array.isArray(payload.tasks) ? payload.tasks : [],
       details: payload.details || payload.requirements || '',
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+      materials: Array.isArray(payload.materials) ? payload.materials : [],
+      checklistItems: Array.isArray(payload.checklistItems) ? payload.checklistItems : [],
+      evidence: Array.isArray(payload.evidence)
+        ? payload.evidence
+        : Array.isArray(payload.photographicEvidence)
+          ? payload.photographicEvidence
+          : [],
+      photographicEvidence: Array.isArray(payload.photographicEvidence)
+        ? payload.photographicEvidence
+        : Array.isArray(payload.evidence)
+          ? payload.evidence
+          : [],
+      signatures: Array.isArray(payload.signatures) ? payload.signatures : [],
+      statusHistory: Array.isArray(payload.statusHistory) ? payload.statusHistory : [],
       notes: payload.notes || payload.observations || '',
     }
     const sanitizedPayload = safeJsonPayload(payloadMetadata, {
@@ -946,8 +1098,9 @@ const normalizeForPrisma = (key, payload = {}) => {
 
     return cleanPayload({
       id: workOrderId,
+      workOrderNumber: String(workOrderNumber),
       title: payload.title || 'Orden de trabajo',
-      type: payload.type || 'Administrativo',
+      type,
       client: payload.clientName || payload.client || payload.cliente || '',
       company: payload.company || '',
       quoteNumber: payload.quoteNumber || '',
@@ -1137,7 +1290,7 @@ const list = async (key) => {
   const records = await model.findMany({
     orderBy: { createdAt: 'desc' },
     ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
-    ...(key === 'workOrders' ? { include: { workOrderMovements: true } } : {}),
+    ...(key === 'workOrders' ? { include: workOrderInclude } : {}),
   })
   return records.map((record) => serialize(key, record))
 }
@@ -1147,7 +1300,7 @@ const findById = async (key, id) => {
   const record = await model.findUnique({
     where: { id },
     ...(key === 'quotes' ? { include: { quoteItems: true } } : {}),
-    ...(key === 'workOrders' ? { include: { workOrderMovements: true } } : {}),
+    ...(key === 'workOrders' ? { include: workOrderInclude } : {}),
   })
   if (!record) {
     const error = new Error('Registro no encontrado.')
@@ -1189,6 +1342,169 @@ const syncQuoteItems = async (quote, payload = {}) => {
       quoteNumber: quote.quoteNumber,
     })),
   })
+}
+
+const getWorkOrderEvidenceFromPayload = (payload = {}) =>
+  Array.isArray(payload.evidence)
+    ? payload.evidence
+    : Array.isArray(payload.photographicEvidence)
+      ? payload.photographicEvidence
+      : []
+
+const syncWorkOrderMaterials = async (workOrder, payload = {}) => {
+  const materials = Array.isArray(payload.materials) ? payload.materials : []
+  if (!workOrder?.id) return
+
+  await getPrisma().workOrderMaterial.deleteMany({ where: { workOrderId: workOrder.id } })
+  if (!materials.length) return
+
+  await getPrisma().workOrderMaterial.createMany({
+    data: materials
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => {
+        const quantity = toNumber(item.quantity ?? item.cantidad)
+        const unitCost = toNumber(item.unitCost ?? item.cost ?? item.costoUnitario)
+        const totalCost = toNumber(item.totalCost ?? item.total ?? quantity * unitCost)
+
+        return {
+          id: item.id || `${workOrder.id}-mat-${index + 1}`,
+          workOrderId: workOrder.id,
+          materialId: emptyToNull(item.materialId),
+          name: String(item.name || item.materialName || item.description || item.descripcion || `Material ${index + 1}`),
+          sku: item.sku || '',
+          unit: item.unit || item.unidad || '',
+          quantity,
+          unitCost,
+          totalCost,
+          observations: item.observations || item.observaciones || '',
+          payload: safeJsonPayload(item, { context: 'workOrderMaterials', field: 'payload', id: item.id || workOrder.id }),
+          createdAt: toDate(item.createdAt) || new Date(),
+          updatedAt: toDate(item.updatedAt) || new Date(),
+        }
+      }),
+  })
+}
+
+const syncWorkOrderChecklistItems = async (workOrder, payload = {}) => {
+  const checklistItems = Array.isArray(payload.checklistItems) ? payload.checklistItems : []
+  if (!workOrder?.id) return
+
+  await getPrisma().workOrderChecklistItem.deleteMany({ where: { workOrderId: workOrder.id } })
+  if (!checklistItems.length) return
+
+  await getPrisma().workOrderChecklistItem.createMany({
+    data: checklistItems
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: item.id || `${workOrder.id}-check-${index + 1}`,
+        workOrderId: workOrder.id,
+        label: String(item.label || item.name || item.title || `Checklist ${index + 1}`),
+        category: item.category || item.section || '',
+        sortOrder: Number.isFinite(Number(item.sortOrder ?? item.order ?? index)) ? Number(item.sortOrder ?? item.order ?? index) : index,
+        isChecked: Boolean(item.isChecked ?? item.checked ?? item.done),
+        checkedAt: toDate(item.checkedAt),
+        checkedByName: item.checkedByName || item.userName || '',
+        checkedByEmail: item.checkedByEmail || item.userEmail || '',
+        observations: item.observations || item.notes || '',
+        payload: safeJsonPayload(item, { context: 'workOrderChecklistItems', field: 'payload', id: item.id || workOrder.id }),
+        createdAt: toDate(item.createdAt) || new Date(),
+        updatedAt: toDate(item.updatedAt) || new Date(),
+      })),
+  })
+}
+
+const syncWorkOrderEvidence = async (workOrder, payload = {}) => {
+  const evidenceItems = getWorkOrderEvidenceFromPayload(payload)
+  if (!workOrder?.id) return
+
+  await getPrisma().workOrderEvidence.deleteMany({ where: { workOrderId: workOrder.id } })
+  if (!evidenceItems.length) return
+
+  await getPrisma().workOrderEvidence.createMany({
+    data: evidenceItems
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: item.id || `${workOrder.id}-evidence-${index + 1}`,
+        workOrderId: workOrder.id,
+        type: item.type || item.kind || 'photo',
+        fileName: item.fileName || item.filename || item.name || '',
+        fileUrl: item.fileUrl || item.url || item.publicUrl || '',
+        mimeType: item.mimeType || item.mimetype || '',
+        sizeBytes: toIntegerOrNull(item.sizeBytes ?? item.size),
+        description: item.description || item.observations || '',
+        takenAt: toDate(item.takenAt || item.date),
+        uploadedByName: item.uploadedByName || item.userName || '',
+        uploadedByEmail: item.uploadedByEmail || item.userEmail || '',
+        payload: safeJsonPayload(item, { context: 'workOrderEvidence', field: 'payload', id: item.id || workOrder.id }),
+        createdAt: toDate(item.createdAt) || new Date(),
+        updatedAt: toDate(item.updatedAt) || new Date(),
+      })),
+  })
+}
+
+const syncWorkOrderSignatures = async (workOrder, payload = {}) => {
+  const signatures = Array.isArray(payload.signatures) ? payload.signatures : []
+  if (!workOrder?.id) return
+
+  await getPrisma().workOrderSignature.deleteMany({ where: { workOrderId: workOrder.id } })
+  if (!signatures.length) return
+
+  await getPrisma().workOrderSignature.createMany({
+    data: signatures
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: item.id || `${workOrder.id}-signature-${index + 1}`,
+        workOrderId: workOrder.id,
+        role: item.role || item.type || '',
+        signerName: String(item.signerName || item.name || `Firmante ${index + 1}`),
+        signerRut: item.signerRut || item.rut || '',
+        signerEmail: item.signerEmail || item.email || '',
+        signatureUrl: item.signatureUrl || item.url || '',
+        dataUrl: item.dataUrl || item.signatureDataUrl || '',
+        fileName: item.fileName || item.filename || '',
+        mimeType: item.mimeType || item.mimetype || '',
+        signedAt: toDate(item.signedAt || item.date),
+        payload: safeJsonPayload(item, { context: 'workOrderSignatures', field: 'payload', id: item.id || workOrder.id }),
+        createdAt: toDate(item.createdAt) || new Date(),
+        updatedAt: toDate(item.updatedAt) || new Date(),
+      })),
+  })
+}
+
+const syncWorkOrderStatusHistory = async (workOrder, payload = {}) => {
+  const statusHistory = Array.isArray(payload.statusHistory) ? payload.statusHistory : []
+  if (!workOrder?.id) return
+
+  await getPrisma().workOrderStatusHistory.deleteMany({ where: { workOrderId: workOrder.id } })
+  if (!statusHistory.length) return
+
+  await getPrisma().workOrderStatusHistory.createMany({
+    data: statusHistory
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: item.id || `${workOrder.id}-status-${index + 1}`,
+        workOrderId: workOrder.id,
+        fromStatus: item.fromStatus || '',
+        toStatus: String(item.toStatus || item.status || workOrder.status || 'draft'),
+        comment: item.comment || item.observations || '',
+        userName: item.userName || '',
+        userEmail: item.userEmail || '',
+        payload: safeJsonPayload(item, { context: 'workOrderStatusHistory', field: 'payload', id: item.id || workOrder.id }),
+        createdAt: toDate(item.createdAt) || new Date(),
+      })),
+  })
+}
+
+const syncWorkOrderRelations = async (workOrder, payload = {}) => {
+  if (!workOrder?.id) return
+
+  await Promise.all([
+    syncWorkOrderMaterials(workOrder, payload),
+    syncWorkOrderChecklistItems(workOrder, payload),
+    syncWorkOrderEvidence(workOrder, payload),
+    syncWorkOrderSignatures(workOrder, payload),
+    syncWorkOrderStatusHistory(workOrder, payload),
+  ])
 }
 
 const getQuoteDocumentStatus = (quoteStatus = '') => {
@@ -1267,6 +1583,15 @@ const groupByCount = async (model, field, fallback) => {
 
 const fetchCreatedOrUpdatedRecord = async (key, id) => findById(key, id)
 
+const workOrderInclude = {
+  workOrderMovements: true,
+  workOrderMaterials: true,
+  workOrderChecklistItems: { orderBy: { sortOrder: 'asc' } },
+  workOrderEvidence: { orderBy: { createdAt: 'desc' } },
+  workOrderSignatures: { orderBy: { createdAt: 'desc' } },
+  workOrderStatusHistory: { orderBy: { createdAt: 'desc' } },
+}
+
 const create = async (key, prefix, payload) => {
   const model = getModel(key)
   const data = normalizeForPrisma(key, { id: payload.id || createId(prefix), ...payload })
@@ -1287,6 +1612,10 @@ const create = async (key, prefix, payload) => {
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
     await syncQuoteDocument(record)
+    return fetchCreatedOrUpdatedRecord(key, record.id)
+  }
+  if (key === 'workOrders') {
+    await syncWorkOrderRelations(record, payload)
     return fetchCreatedOrUpdatedRecord(key, record.id)
   }
 
@@ -1314,6 +1643,10 @@ const update = async (key, id, payload) => {
   if (key === 'quotes') {
     await syncQuoteItems(record, payload)
     await syncQuoteDocument(record)
+    return fetchCreatedOrUpdatedRecord(key, record.id)
+  }
+  if (key === 'workOrders') {
+    await syncWorkOrderRelations(record, payload)
     return fetchCreatedOrUpdatedRecord(key, record.id)
   }
 
