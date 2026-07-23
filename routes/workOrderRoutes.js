@@ -50,6 +50,22 @@ router.get('/activity', requireAuth, canViewWorkOrders, async (request, response
   }
 })
 
+router.get('/preparation/catalog', requireAuth, canViewWorkOrders, async (_request, response, next) => {
+  try {
+    response.json(await workOrderService.getPreparationCatalog())
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/preparation/preview', requireAuth, canViewWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.previewWorkOrderPreparation(request.body || {}, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.get('/taller-instalacion/drafts', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
     response.json(await workOrderService.listTallerInstallationDrafts(request.currentUser))
@@ -121,6 +137,64 @@ router.post('/', requireAuth, canCreateWorkOrders, async (request, response, nex
 router.get('/:id', requireAuth, canViewWorkOrders, async (request, response, next) => {
   try {
     response.json(await workOrderService.getWorkOrderById(request.params.id, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/:id/preparation', requireAuth, canViewWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.getWorkOrderPreparationById(request.params.id, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/:id/preparation/print', requireAuth, canViewWorkOrders, async (request, response, next) => {
+  try {
+    response.json(await workOrderService.getWorkOrderPrintableChecklist(request.params.id, request.currentUser))
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/preparation/recommendations/accept', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(
+      await workOrderService.acceptWorkOrderPreparationRecommendations(
+        request.params.id,
+        request.body || {},
+        request.currentUser,
+      ),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/preparation/recommendations/discard', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(
+      await workOrderService.discardWorkOrderPreparationRecommendations(
+        request.params.id,
+        request.body || {},
+        request.currentUser,
+      ),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/preparation/ready-for-departure', requireAuth, canUpdateWorkOrders, async (request, response, next) => {
+  try {
+    response.json(
+      await workOrderService.markWorkOrderReadyForDeparture(
+        request.params.id,
+        request.body || {},
+        request.currentUser,
+      ),
+    )
   } catch (error) {
     next(error)
   }

@@ -1,5 +1,12 @@
 const { randomUUID } = require('crypto')
 const dataAdapter = require('./dataAdapter')
+const {
+  buildPreparationCatalog,
+  buildWorkOrderPreparation,
+  createChecklistFromRecommendation,
+  createMaterialFromRecommendation,
+  getPreparationDecisions,
+} = require('./workOrderPreparationRules')
 
 const WORK_ORDER_TYPES = {
   TALLER_INSTALACION: 'TALLER_INSTALACION',
@@ -151,6 +158,13 @@ const ensurePayloadObject = (payload = {}) => {
 
 const getFirstArray = (...values) => values.find((value) => Array.isArray(value)) || []
 
+const uniq = (values = []) => [...new Set(values.filter(Boolean))]
+
+const toPayloadObject = (value) =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+
+const getWorkOrderPayload = (workOrder = {}) => toPayloadObject(workOrder.payload)
+
 const validateArrayField = (payload = {}, fieldName, aliases = []) => {
   const fieldNames = [fieldName, ...aliases]
   const provided = fieldNames.find((name) => payload[name] !== undefined)
@@ -195,10 +209,24 @@ const validateWorkOrderPayload = (payload = {}) => {
       throw createError(`materials[${index}].totalCost debe ser un numero mayor o igual a 0.`, 400)
     }
   })
+
+  const evidenceItems = getFirstArray(payload.evidence, payload.photographicEvidence)
+  const duplicatedEvidence = evidenceItems.reduce((seen, item, index) => {
+    const duplicateKey = normalizeText(`${item.fileUrl || item.url || ''}|${item.fileName || item.filename || ''}|${item.sizeBytes || item.size || ''}`)
+    if (!duplicateKey || duplicateKey === '||') return seen
+    if (seen.keys.has(duplicateKey)) seen.duplicates.push(index)
+    seen.keys.add(duplicateKey)
+    return seen
+  }, { keys: new Set(), duplicates: [] })
+
+  if (duplicatedEvidence.duplicates.length) {
+    throw createError('La evidencia fotografica contiene archivos duplicados.', 400)
+  }
 }
 
 const normalizeMaterialItems = (items = []) =>
   getFirstArray(items).map((item, index) => {
+    const itemPayload = toPayloadObject(item.payload)
     const quantity = Number(item.quantity ?? item.cantidad ?? 0)
     const unitCost = Number(item.unitCost ?? item.cost ?? item.costoUnitario ?? 0)
     const totalCost = Number(item.totalCost ?? item.total ?? quantity * unitCost)
@@ -214,19 +242,35 @@ const normalizeMaterialItems = (items = []) =>
       unitCost,
       totalCost,
       observations: item.observations || item.observaciones || '',
+      status: item.status || itemPayload.status || '',
+      availability: item.availability || item.disponibilidad || itemPayload.availability || '',
+      isRequired: Boolean(item.isRequired ?? item.required ?? itemPayload.isRequired ?? itemPayload.required),
+      isRecommended: Boolean(item.isRecommended ?? item.recommended ?? itemPayload.isRecommended ?? itemPayload.recommended),
+      confirmedForLoading: Boolean(item.confirmedForLoading ?? item.confirmadoCarga ?? itemPayload.confirmedForLoading),
+      loadedInVehicle: Boolean(item.loadedInVehicle ?? item.cargadoVehiculo ?? itemPayload.loadedInVehicle),
     }
   })
 
 const normalizeChecklistItems = (items = []) =>
-  getFirstArray(items).map((item, index) => ({
-    ...item,
-    id: item.id || createLocalId(`woc-${index + 1}`),
-    label: item.label || item.name || item.title || `Checklist ${index + 1}`,
-    category: item.category || item.section || '',
-    sortOrder: Number.isFinite(Number(item.sortOrder ?? item.order ?? index)) ? Number(item.sortOrder ?? item.order ?? index) : index,
-    isChecked: Boolean(item.isChecked ?? item.checked ?? item.done),
-    observations: item.observations || item.notes || '',
-  }))
+  getFirstArray(items).map((item, index) => {
+    const itemPayload = toPayloadObject(item.payload)
+
+    return {
+      ...item,
+      id: item.id || createLocalId(`woc-${index + 1}`),
+      label: item.label || item.name || item.title || `Checklist ${index + 1}`,
+      category: item.category || item.section || itemPayload.category || '',
+      sortOrder: Number.isFinite(Number(item.sortOrder ?? item.order ?? index)) ? Number(item.sortOrder ?? item.order ?? index) : index,
+      isChecked: Boolean(item.isChecked ?? item.checked ?? item.done),
+      observations: item.observations || item.notes || '',
+      itemType: item.itemType || itemPayload.itemType || 'checklist',
+      status: item.status || itemPayload.status || '',
+      isRequired: Boolean(item.isRequired ?? item.required ?? itemPayload.isRequired ?? itemPayload.required),
+      isRecommended: Boolean(item.isRecommended ?? item.recommended ?? itemPayload.isRecommended ?? itemPayload.recommended),
+      confirmedForLoading: Boolean(item.confirmedForLoading ?? itemPayload.confirmedForLoading),
+      loadedInVehicle: Boolean(item.loadedInVehicle ?? itemPayload.loadedInVehicle),
+    }
+  })
 
 const normalizeEvidenceItems = (items = []) =>
   getFirstArray(items).map((item, index) => ({
@@ -237,6 +281,7 @@ const normalizeEvidenceItems = (items = []) =>
     fileUrl: item.fileUrl || item.url || item.publicUrl || '',
     mimeType: item.mimeType || item.mimetype || '',
     description: item.description || item.observations || '',
+    category: item.category || item.evidenceType || toPayloadObject(item.payload).category || '',
   }))
 
 const normalizeSignatureItems = (items = []) =>
@@ -324,6 +369,8 @@ const normalizeWorkOrderPayload = (payload = {}, user = {}) => {
     photographicEvidence: evidence,
     signatures: normalizeSignatureItems(payload.signatures),
     statusHistory: normalizeStatusHistoryItems(payload.statusHistory),
+    preparationDecisions: payload.preparationDecisions || getWorkOrderPayload(payload).preparationDecisions || {},
+    preparationStatus: payload.preparationStatus || getWorkOrderPayload(payload).preparationStatus || {},
     createdAt: payload.createdAt || now,
     updatedAt: now,
   }
@@ -429,6 +476,207 @@ const updateTallerInstallationDraft = async (id, payload = {}, user = {}) => {
     },
     user,
   )
+}
+
+const getMaterialCatalog = async () => {
+  try {
+    return await dataAdapter.list('materials')
+  } catch (error) {
+    console.error('[workOrderService] No se pudo cargar catalogo de materiales para preparacion.', error.stack || error)
+    return []
+  }
+}
+
+const getPreparationCatalog = async () => buildPreparationCatalog(await getMaterialCatalog())
+
+const previewWorkOrderPreparation = async (payload = {}, user = {}) => {
+  ensurePayloadObject(payload)
+  const materialCatalog = await getMaterialCatalog()
+  const workOrder = normalizeWorkOrderPayload(payload, user)
+  return buildWorkOrderPreparation(workOrder, { materialCatalog })
+}
+
+const getWorkOrderPreparationById = async (id, user = {}) => {
+  const workOrder = await getWorkOrderById(id, user)
+  const materialCatalog = await getMaterialCatalog()
+  const preparation = buildWorkOrderPreparation(workOrder, { materialCatalog })
+
+  return {
+    workOrder,
+    ...preparation,
+  }
+}
+
+const getSelectedRecommendations = (preparation = {}, payload = {}) => {
+  const actionable = Array.isArray(preparation.actionableRecommendations) ? preparation.actionableRecommendations : []
+  const requestedIds = new Set(getFirstArray(payload.recommendationIds, payload.ids, payload.selectedRecommendationIds))
+  const acceptAll = Boolean(payload.acceptAll || payload.all)
+
+  if (acceptAll) return actionable
+  if (requestedIds.size === 0) return []
+  return actionable.filter((item) => requestedIds.has(item.id))
+}
+
+const mergePreparationDecisions = (workOrder = {}, patch = {}) => {
+  const current = getPreparationDecisions(workOrder)
+
+  return {
+    ...current,
+    ...patch,
+    acceptedRecommendationIds: uniq([
+      ...getFirstArray(current.acceptedRecommendationIds),
+      ...getFirstArray(patch.acceptedRecommendationIds),
+    ]),
+    discardedRecommendationIds: uniq([
+      ...getFirstArray(current.discardedRecommendationIds).filter(
+        (id) => !getFirstArray(patch.acceptedRecommendationIds).includes(id),
+      ),
+      ...getFirstArray(patch.discardedRecommendationIds),
+    ]),
+  }
+}
+
+const acceptWorkOrderPreparationRecommendations = async (id, payload = {}, user = {}) => {
+  ensurePayloadObject(payload)
+  const current = await getWorkOrderById(id, user)
+  const materialCatalog = await getMaterialCatalog()
+  const preparation = buildWorkOrderPreparation(current, { materialCatalog })
+  const selected = getSelectedRecommendations(preparation, payload)
+
+  if (!selected.length) {
+    return {
+      workOrder: current,
+      accepted: [],
+      preparation,
+    }
+  }
+
+  const materialItems = selected
+    .filter((item) => item.itemType === 'material')
+    .map((item, index) => createMaterialFromRecommendation(item, user, index))
+  const checklistItems = selected
+    .filter((item) => item.itemType !== 'material')
+    .map((item, index) => createChecklistFromRecommendation(item, user, index))
+  const acceptedRecommendationIds = selected.map((item) => item.id)
+  const nextDecisions = mergePreparationDecisions(current, {
+    acceptedRecommendationIds,
+    lastAcceptedAt: new Date().toISOString(),
+    lastAcceptedByName: user.name || '',
+    lastAcceptedByEmail: user.email || '',
+  })
+  const updatedWorkOrder = await updateWorkOrder(
+    id,
+    {
+      materials: [...getFirstArray(current.materials), ...materialItems],
+      checklistItems: [...getFirstArray(current.checklistItems), ...checklistItems],
+      preparationDecisions: nextDecisions,
+    },
+    user,
+  )
+  const updatedPreparation = buildWorkOrderPreparation(updatedWorkOrder, { materialCatalog })
+
+  return {
+    workOrder: updatedWorkOrder,
+    accepted: selected,
+    preparation: updatedPreparation,
+  }
+}
+
+const discardWorkOrderPreparationRecommendations = async (id, payload = {}, user = {}) => {
+  ensurePayloadObject(payload)
+  const current = await getWorkOrderById(id, user)
+  const materialCatalog = await getMaterialCatalog()
+  const preparation = buildWorkOrderPreparation(current, { materialCatalog })
+  const selected = getSelectedRecommendations(preparation, payload)
+  const discardedRecommendationIds = selected.map((item) => item.id)
+  const nextDecisions = mergePreparationDecisions(current, {
+    discardedRecommendationIds,
+    lastDiscardedAt: new Date().toISOString(),
+    lastDiscardedByName: user.name || '',
+    lastDiscardedByEmail: user.email || '',
+  })
+  const updatedWorkOrder = await updateWorkOrder(id, { preparationDecisions: nextDecisions }, user)
+  const updatedPreparation = buildWorkOrderPreparation(updatedWorkOrder, { materialCatalog })
+
+  return {
+    workOrder: updatedWorkOrder,
+    discarded: selected,
+    preparation: updatedPreparation,
+  }
+}
+
+const canAuthorizeReadyException = (user = {}) =>
+  hasPermission(user, 'admin.all') || hasPermission(user, 'workorders.complete') || hasPermission(user, 'workorders.assign')
+
+const markWorkOrderReadyForDeparture = async (id, payload = {}, user = {}) => {
+  ensurePayloadObject(payload)
+  const current = await getWorkOrderById(id, user)
+  const materialCatalog = await getMaterialCatalog()
+  const preparation = buildWorkOrderPreparation(current, { materialCatalog })
+  const summary = preparation.summary
+  const requestedException = Boolean(payload.authorizedException || payload.exception || payload.force)
+  const exceptionObservation = String(payload.exceptionObservation || payload.observation || payload.observations || '').trim()
+
+  if (!summary.canMarkReadyForDeparture) {
+    if (!requestedException) {
+      throw createError('No se puede marcar la OT como lista para salida mientras existan obligatorios pendientes o faltantes.', 409)
+    }
+
+    if (!canAuthorizeReadyException(user)) {
+      throw createError('No tienes permiso para autorizar una excepcion de salida.', 403)
+    }
+
+    if (!exceptionObservation) {
+      throw createError('Debes indicar una observacion para autorizar la salida con pendientes.', 400)
+    }
+  }
+
+  const preparationStatus = {
+    ...toPayloadObject(current.preparationStatus),
+    readyForDeparture: true,
+    status: requestedException && !summary.canMarkReadyForDeparture ? 'ready_with_exception' : 'ready',
+    markedAt: new Date().toISOString(),
+    markedByName: user.name || '',
+    markedByEmail: user.email || '',
+    exceptionAuthorized: requestedException && !summary.canMarkReadyForDeparture,
+    exceptionObservation,
+    summarySnapshot: {
+      counts: summary.counts,
+      preparationPercent: summary.preparationPercent,
+      warnings: summary.warnings,
+    },
+  }
+  const updatedWorkOrder = await updateWorkOrder(id, { preparationStatus }, user)
+  const updatedPreparation = buildWorkOrderPreparation(updatedWorkOrder, { materialCatalog })
+
+  return {
+    workOrder: updatedWorkOrder,
+    preparation: updatedPreparation,
+    preparationStatus,
+  }
+}
+
+const getWorkOrderPrintableChecklist = async (id, user = {}) => {
+  const { workOrder, ...preparation } = await getWorkOrderPreparationById(id, user)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    page: {
+      size: 'A4',
+      orientation: 'portrait',
+      hideNavigation: true,
+      avoidBreakInside: ['section', 'row', 'signature'],
+    },
+    workOrder,
+    visualTokens: preparation.catalog.visualTokens,
+    sections: preparation.catalog.sections,
+    toolCategories: preparation.catalog.toolCategories,
+    checklistGroups: preparation.catalog.checklistGroups,
+    fieldDeliveryOptions: preparation.catalog.fieldDeliveryOptions,
+    evidenceRequirements: preparation.catalog.evidenceRequirements,
+    recommendations: preparation.recommendations,
+    summary: preparation.summary,
+  }
 }
 
 const deleteWorkOrder = async (id) => dataAdapter.remove('workOrders', id)
@@ -541,15 +789,22 @@ module.exports = {
   createTallerInstallationDraft,
   createWorkOrder,
   deleteWorkOrder,
+  discardWorkOrderPreparationRecommendations,
+  acceptWorkOrderPreparationRecommendations,
+  getPreparationCatalog,
   getTallerInstallationDraftById,
+  getWorkOrderPreparationById,
+  getWorkOrderPrintableChecklist,
   getWorkOrderActivity,
   getWorkOrderById,
   getWorkOrderStats,
   listWorkOrders,
   listTallerInstallationDrafts,
+  markWorkOrderReadyForDeparture,
   normalizePriority,
   normalizeStatus,
   normalizeWorkOrderPayload,
+  previewWorkOrderPreparation,
   updateTallerInstallationDraft,
   updateWorkOrder,
   WORK_ORDER_TYPES,
