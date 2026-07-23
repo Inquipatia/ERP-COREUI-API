@@ -18,28 +18,32 @@ const getBearerToken = (request) => {
   return authorization.slice(7).trim()
 }
 
-const attachUser = (request, _response, next) => {
-  const authorization = request.header('authorization') || ''
-  const token = getBearerToken(request)
-  const currentUser = token ? dataAdapter.getUserByToken(token) : null
+const attachUser = async (request, _response, next) => {
+  try {
+    const authorization = request.header('authorization') || ''
+    const token = getBearerToken(request)
+    const currentUser = token ? await dataAdapter.getUserByToken(token) : null
 
-  request.authToken = token
-  request.currentUser = currentUser
+    request.authToken = token
+    request.currentUser = currentUser
 
-  if (!currentUser && request.path.startsWith('/api')) {
-    logAuthDebug(request, {
-      authMethod: token ? 'bearer' : 'none',
-      hasAuthorizationHeader: Boolean(authorization),
-      hasBearerToken: Boolean(token),
-      reason: !authorization
-        ? 'missing_authorization_header'
-        : !token
-          ? 'malformed_bearer_header'
-          : 'unknown_or_expired_token',
-    })
+    if (!currentUser && request.path.startsWith('/api')) {
+      logAuthDebug(request, {
+        authMethod: token ? 'bearer' : 'none',
+        hasAuthorizationHeader: Boolean(authorization),
+        hasBearerToken: Boolean(token),
+        reason: !authorization
+          ? 'missing_authorization_header'
+          : !token
+            ? 'malformed_bearer_header'
+            : 'unknown_or_expired_token',
+      })
+    }
+
+    next()
+  } catch (error) {
+    next(error)
   }
-
-  next()
 }
 
 const requireAuth = (request, response, next) => {

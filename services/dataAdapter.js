@@ -6,8 +6,10 @@ const {
   getNumberValue,
   registerMovementPayment,
 } = require('../utils/financeCalculations')
+const { createAuthToken, verifyAuthToken } = require('./authTokenService')
 
 const TEMP_DEV_PASSWORD = '123456'
+const AUTH_DEBUG_ENABLED = process.env.AUTH_DEBUG === 'true' && process.env.NODE_ENV !== 'production'
 
 const PERMISSIONS = [
   'admin.all',
@@ -77,6 +79,17 @@ const normalizeText = (value = '') =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
+
+const logAuthFailure = (category, details = {}) => {
+  if (!AUTH_DEBUG_ENABLED) return
+  console.debug('[Rubik auth login]', {
+    adapter: 'json',
+    category,
+    ...details,
+  })
+}
+
+const userIsActive = (user = {}) => normalizeText(user.status || '') === 'activo'
 
 const getPermissionsForRole = (role = '', email = '') => {
   if (OWNER_EMAILS.includes(String(email).toLowerCase())) return PERMISSIONS
@@ -156,7 +169,7 @@ const getPermissionsForRole = (role = '', email = '') => {
 }
 
 const sanitizeUser = (user) => {
-  const { password, ...safeUser } = user
+  const { password, passwordHash, ...safeUser } = user
   return safeUser
 }
 
@@ -501,29 +514,51 @@ const loadDatabase = () => {
   }
 }
 
-const state = {
-  sessions: new Map(),
-  ...loadDatabase(),
-}
+const state = loadDatabase()
 
 const login = ({ email, password }) => {
   const normalizedEmail = String(email || '').trim().toLowerCase()
   const user = state.users.find((candidate) => candidate.email.toLowerCase() === normalizedEmail)
+  const passwordMatches = user ? String(user.password || '') === String(password || '') : false
 
-  if (!user || user.status !== 'Activo' || String(user.password) !== String(password || '')) {
+  if (!user || !userIsActive(user) || !passwordMatches) {
+    logAuthFailure(
+      !user ? 'user_not_found' : !userIsActive(user) ? 'inactive_user' : 'password_mismatch',
+      {
+        hasEmail: Boolean(normalizedEmail),
+        hasPassword: Boolean(String(password || '')),
+        userFound: Boolean(user),
+        userActive: user ? userIsActive(user) : false,
+      },
+    )
     const error = new Error('Credenciales invalidas.')
     error.statusCode = 401
     throw error
   }
 
-  const token = `rubik-token-${randomUUID()}`
   const safeUser = sanitizeUser(user)
-  state.sessions.set(token, safeUser)
+  const token = createAuthToken(safeUser)
 
   return { token, user: safeUser }
 }
 
-const getUserByToken = (token) => state.sessions.get(token) || null
+const getUserByToken = (token) => {
+  try {
+    const tokenPayload = verifyAuthToken(token)
+    const user = state.users.find(
+      (candidate) =>
+        candidate.id === tokenPayload.sub ||
+        candidate.email.toLowerCase() === String(tokenPayload.email || '').toLowerCase(),
+    )
+
+    return user && userIsActive(user) ? sanitizeUser(user) : null
+  } catch (error) {
+    logAuthFailure(error.authFailureCategory || 'invalid_token', {
+      hasToken: Boolean(token),
+    })
+    return null
+  }
+}
 
 const list = (key) => state[key] || []
 
@@ -1022,7 +1057,7 @@ const runWithSelectedAdapter = async (methodName, args = []) => {
   return method(...args)
 }
 
-const getUserByTokenWithFallback = (token) => {
+const getUserByTokenWithFallback = async (token) => {
   if (!token) return null
 
   if (!shouldUsePrismaAdapter || activeAdapterMode === 'json') {

@@ -2,11 +2,12 @@ const { randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { calculateFinanceMovement, getNumberValue, registerMovementPayment } = require('../utils/financeCalculations')
+const { createAuthToken, verifyAuthToken } = require('./authTokenService')
 const { verifyPassword } = require('./passwordUtils')
 const { getPrisma } = require('./prismaClient')
 
 const TEMP_DEV_PASSWORD = '123456'
-const sessions = new Map()
+const AUTH_DEBUG_ENABLED = process.env.AUTH_DEBUG === 'true' && process.env.NODE_ENV !== 'production'
 const DB_FILE = path.join(__dirname, '..', 'data', 'rubik-db.json')
 const PERMISSIONS = [
   'admin.all',
@@ -75,6 +76,17 @@ const normalizeText = (value = '') =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
+
+const logAuthFailure = (category, details = {}) => {
+  if (!AUTH_DEBUG_ENABLED) return
+  console.debug('[Rubik auth login]', {
+    adapter: 'prisma',
+    category,
+    ...details,
+  })
+}
+
+const userIsActive = (user = {}) => normalizeText(user.status || '') === 'activo'
 
 const getPermissionsForRole = (role = '', email = '') => {
   if (OWNER_EMAILS.includes(String(email).toLowerCase())) return PERMISSIONS
@@ -1782,24 +1794,60 @@ const login = async ({ email, password }) => {
   const prisma = getPrisma()
 
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-  const status = normalizeText(user?.status || '')
+  const storedPlainPassword = String(user?.password || '')
   const hasValidHash = user?.passwordHash ? verifyPassword(password, user.passwordHash) : false
   const hasValidPlainPassword =
-    !user?.passwordHash && String(user?.password || TEMP_DEV_PASSWORD) === String(password || '')
+    !user?.passwordHash &&
+    Boolean(storedPlainPassword) &&
+    storedPlainPassword === String(password || '')
+  const hasValidDevPassword =
+    process.env.NODE_ENV !== 'production' &&
+    !user?.passwordHash &&
+    !storedPlainPassword &&
+    String(password || '') === TEMP_DEV_PASSWORD
 
-  if (!user || status !== 'activo' || (!hasValidHash && !hasValidPlainPassword)) {
+  if (!user || !userIsActive(user) || (!hasValidHash && !hasValidPlainPassword && !hasValidDevPassword)) {
+    logAuthFailure(
+      !user ? 'user_not_found' : !userIsActive(user) ? 'inactive_user' : 'password_mismatch',
+      {
+        hasEmail: Boolean(normalizedEmail),
+        hasPassword: Boolean(String(password || '')),
+        userFound: Boolean(user),
+        userActive: user ? userIsActive(user) : false,
+        hasPasswordHash: Boolean(user?.passwordHash),
+        hasLegacyPlainPassword: Boolean(storedPlainPassword),
+      },
+    )
     const error = new Error('Credenciales invalidas.')
     error.statusCode = 401
     throw error
   }
 
-  const token = `rubik-token-${randomUUID()}`
   const safeUser = sanitizeUser(serializeUser(user))
-  sessions.set(token, safeUser)
+  const token = createAuthToken(safeUser)
   return { token, user: safeUser }
 }
 
-const getUserByToken = (token) => sessions.get(token) || null
+const getUserByToken = async (token) => {
+  try {
+    const tokenPayload = verifyAuthToken(token)
+    const user = await getPrisma().user.findFirst({
+      where: {
+        OR: [
+          { id: tokenPayload.sub },
+          { email: String(tokenPayload.email || '').toLowerCase() },
+        ],
+      },
+    })
+
+    return user && userIsActive(user) ? sanitizeUser(serializeUser(user)) : null
+  } catch (error) {
+    logAuthFailure(error.authFailureCategory || 'invalid_token', {
+      hasToken: Boolean(token),
+    })
+    return null
+  }
+}
 
 const getDashboard = async (user) => {
   const prisma = getPrisma()

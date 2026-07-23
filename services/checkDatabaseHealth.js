@@ -1,5 +1,6 @@
 require('dotenv').config({ quiet: true })
 
+const { getTokenTtlSeconds } = require('./authTokenService')
 const dataAdapter = require('./dataAdapter')
 const statisticsService = require('./statisticsService')
 const { getPrisma } = require('./prismaClient')
@@ -143,7 +144,8 @@ const checkAuthHealth = async () => {
       adapter === 'prisma'
         ? 'prisma-passwordHash-with-legacy-plain-fallback'
         : 'json-password',
-    tokenStrategy: 'opaque-bearer-session',
+    tokenStrategy: 'signed-bearer-token',
+    tokenTtlSeconds: getTokenTtlSeconds(),
     error: null,
   }
 
